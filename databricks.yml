@@ -1,0 +1,37 @@
+bundle:
+  name: gap_supply_chain_demo
+
+variables:
+  catalog_name:
+    description: "Unity Catalog name. Convention: GAP_Demo_{env}"
+    default: GAP_Demo_Dev
+  warehouse_id:
+    description: "SQL Warehouse ID for Genie Spaces"
+    default: ""
+
+workspace:
+  root_path: /Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    default: true
+    mode: development
+    variables:
+      catalog_name: GAP_Demo_Dev
+      warehouse_id: "bf50738cf2819197"
+    workspace:
+      host: https://adb-1866518241053589.9.azuredatabricks.net
+
+  staging:
+    variables:
+      catalog_name: GAP_Demo_Staging
+      warehouse_id: ""
+
+  prod:
+    mode: production
+    variables:
+      catalog_name: GAP_Demo_Prod
+      warehouse_id: ""
