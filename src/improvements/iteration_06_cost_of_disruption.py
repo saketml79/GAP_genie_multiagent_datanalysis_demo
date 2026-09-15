@@ -59,7 +59,7 @@ def get_genie_space(name_prefix):
     resp = requests.get(f"{host}/api/2.0/genie/spaces", headers=headers)
     for s in resp.json().get("spaces", []):
         if s.get("title", "").startswith(name_prefix):
-            return s["id"]
+            return s["space_id"]
     raise ValueError(f"Genie Agent '{name_prefix}' not found")
 
 # COMMAND ----------
@@ -86,9 +86,9 @@ logistics_waste AS (
   GROUP BY destination_region
 ),
 total_penalties AS (
-  SELECT ROUND(SUM(penalty_usd), 2) AS total_sla_penalties
+  SELECT ROUND(SUM(penalty_amount), 2) AS total_sla_penalties
   FROM {CATALOG}.supplier_procurement.vendor_slas
-  WHERE penalty_usd > 0
+  WHERE penalty_amount > 0
 ),
 late_share AS (
   SELECT destination_region AS region,
@@ -289,34 +289,40 @@ for tool in tools_resp.json().get("tools", []):
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 6: Add Cost of Disruption to Ground Truth
-# Compute the Western CoD value from live data
+# DBTITLE 1,Step 6: Compute GT Dynamically from View Output
+# Compute the Western CoD value DYNAMICALLY from live data
+# No hardcoding — GT value = whatever the view produces
 western_cod = spark.sql(f"""
-  SELECT total_cost_of_disruption
+  SELECT ROUND(total_cost_of_disruption, 2) AS cod
   FROM {CATALOG}.reporting.cost_of_disruption_by_region
   WHERE region = 'Western'
-""").first()[0]
+""").first()["cod"]
 
 print(f"Western Cost of Disruption: ${western_cod:,.2f}")
 
-# Insert into ground_truth_kpis
-spark.sql(f"""
-  MERGE INTO {CATALOG}.reporting.ground_truth_kpis AS gt
-  USING (SELECT
-    'executive-reporting' AS agent,
-    'Western Cost of Disruption' AS metric,
-    CAST(ROUND({western_cod}, 1) AS STRING) AS ground_truth_value
-  ) AS src
-  ON gt.metric = src.metric
-  WHEN MATCHED THEN UPDATE SET gt.ground_truth_value = src.ground_truth_value
-  WHEN NOT MATCHED THEN INSERT (agent, metric, ground_truth_value)
-    VALUES (src.agent, src.metric, src.ground_truth_value)
-""")
+# Compute reference SQL (store the exact query that produces this value)
+ref_sql = f"SELECT ROUND(total_cost_of_disruption, 2) FROM {CATALOG}.reporting.cost_of_disruption_by_region WHERE region = 'Western'"
 
-print(f"✓ Ground truth updated — now includes Western CoD = ${western_cod:,.1f}")
+# MERGE into ground_truth_kpis — uses EXACT computed value, no rounding
+from pyspark.sql import Row
+from pyspark.sql.functions import current_timestamp, lit
+
+cod_row = spark.createDataFrame([Row(
+    agent="executive-reporting",
+    metric="Western Cost of Disruption",
+    ground_truth_value=str(western_cod),
+    reference_sql=ref_sql,
+    uc_feature_needed="Metric View: cross-domain join (demand + logistics + supplier). Only after Iter 4."
+)]).withColumn("calculated_at", current_timestamp())
+
+# Delete old row if exists, then insert fresh
+spark.sql(f"DELETE FROM {CATALOG}.reporting.ground_truth_kpis WHERE metric = 'Western Cost of Disruption'")
+cod_row.write.insertInto(f"{CATALOG}.reporting.ground_truth_kpis", overwrite=False)
+
+print(f"\u2713 Ground truth updated — Western CoD = ${western_cod:,.2f} (computed from live view)")
 
 # Show all ground truth
-spark.sql(f"SELECT * FROM {CATALOG}.reporting.ground_truth_kpis ORDER BY agent, metric").display()
+spark.sql(f"SELECT metric, ground_truth_value FROM {CATALOG}.reporting.ground_truth_kpis ORDER BY metric").display()
 
 # COMMAND ----------
 

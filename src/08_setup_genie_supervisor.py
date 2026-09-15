@@ -189,6 +189,7 @@ print(f"\n✓ All Genie Spaces created: {json.dumps(space_ids, indent=2)}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Create Evaluator Space + Ground Truth Table
 # ====================================================================
 # CREATE EVALUATOR SPACE + GROUND TRUTH TABLE
 # ====================================================================
@@ -197,52 +198,109 @@ print("\n--- Creating Evaluator Space and Ground Truth Table ---")
 # Create ground_truth_kpis table from live data
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.reporting")
 spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.reporting.ground_truth_kpis")
+# Ground truth: 9 prompt-aligned metrics — ALL computed dynamically from live data
+# Each metric maps to a business term in MAIN_PROMPT
+# uc_feature_needed documents which UC feature is required for agents to find it
 spark.sql(f"""
-CREATE TABLE {CATALOG}.reporting.ground_truth_kpis AS
-WITH demand AS (
-  SELECT ROUND(SUM(CASE WHEN order_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
-                          AND order_date < DATE_TRUNC('month', DATE '2026-09-01') THEN total_amount ELSE 0 END)
-       - SUM(CASE WHEN order_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -2))
-                          AND order_date < DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1)) THEN total_amount ELSE 0 END)) AS western_rev_change
-  FROM {CATALOG}.demand_analysis.sales_orders WHERE region = 'Western'
-),
-inventory AS (
-  SELECT COUNT(DISTINCT CASE WHEN stockout_flag = true THEN sku_id END) AS western_stockouts
-  FROM {CATALOG}.inventory_management.inventory_ledger WHERE region = 'Western'
-),
-inv_safety AS (
-  SELECT COUNT(CASE WHEN below_safety_stock_flag = true THEN 1 END) AS western_below_safety
-  FROM {CATALOG}.inventory_management.inventory_ledger WHERE region = 'Western'
-),
-logistics AS (
-  SELECT ROUND(AVG(CASE WHEN is_late THEN 1.0 ELSE 0.0 END) * 100, 1) AS western_late_pct,
-         ROUND(AVG(CASE WHEN is_late THEN delay_days ELSE NULL END), 1) AS western_avg_delay
-  FROM {CATALOG}.logistics_operations.shipments
-  WHERE ship_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
-    AND ship_date < DATE_TRUNC('month', DATE '2026-09-01') AND destination_region = 'Western'
-),
-supplier AS (
-  SELECT ROUND(AVG(CASE WHEN supplier_continent = 'Asia' AND is_late THEN 1.0
-                        WHEN supplier_continent = 'Asia' THEN 0.0 END) * 100, 1) AS asia_late_pct,
-         ROUND(AVG(CASE WHEN supplier_continent = 'Asia' THEN lead_time_variance_days END), 1) AS asia_avg_variance
-  FROM {CATALOG}.supplier_procurement.supplier_orders
-  WHERE order_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
-    AND order_date < DATE_TRUNC('month', DATE '2026-09-01')
-),
-exec_kpis AS (
-  SELECT service_level_pct, supplier_late_pct_last_month, total_stockout_skus
-  FROM {CATALOG}.reporting.executive_kpis
-)
-SELECT 'demand-analysis' AS agent, 'Western revenue change (Aug 2026 vs Jul 2026 MoM)' AS metric, CAST(western_rev_change AS STRING) AS ground_truth_value FROM demand
-UNION ALL SELECT 'inventory-management', 'Western stockout SKUs', CAST(western_stockouts AS STRING) FROM inventory
-UNION ALL SELECT 'inventory-management', 'Western below safety stock', CAST(western_below_safety AS STRING) FROM inv_safety
-UNION ALL SELECT 'logistics-operations', 'Western late delivery rate (Aug 2026)', CAST(western_late_pct AS STRING) FROM logistics
-UNION ALL SELECT 'logistics-operations', 'Western avg delay days (Aug 2026)', CAST(western_avg_delay AS STRING) FROM logistics
-UNION ALL SELECT 'supplier-risk', 'Asia supplier late rate (Aug 2026)', CAST(asia_late_pct AS STRING) FROM supplier
-UNION ALL SELECT 'supplier-risk', 'Asia avg lead time variance (Aug 2026)', CAST(asia_avg_variance AS STRING) FROM supplier
-UNION ALL SELECT 'executive-reporting', 'Service level pct', CAST(service_level_pct AS STRING) FROM exec_kpis
-UNION ALL SELECT 'executive-reporting', 'Supplier late pct (Aug 2026)', CAST(supplier_late_pct_last_month AS STRING) FROM exec_kpis
-UNION ALL SELECT 'executive-reporting', 'Total stockout SKUs', CAST(total_stockout_skus AS STRING) FROM exec_kpis
+CREATE TABLE {CATALOG}.reporting.ground_truth_kpis (
+  agent STRING COMMENT 'Which Genie sub-agent should answer this',
+  metric STRING COMMENT 'Business metric name as referenced in the prompt',
+  ground_truth_value STRING COMMENT 'Correct value computed from source tables',
+  reference_sql STRING COMMENT 'The exact SQL that produces the correct value',
+  uc_feature_needed STRING COMMENT 'UC semantic feature required to answer correctly',
+  calculated_at TIMESTAMP COMMENT 'When this ground truth was last computed'
+) USING DELTA
+""")
+spark.sql(f"""
+INSERT INTO {CATALOG}.reporting.ground_truth_kpis VALUES
+  ('demand-analysis', 'Western revenue MoM change (Aug vs Jul 2026)',
+   CAST((
+     SELECT ROUND(
+       SUM(CASE WHEN order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01' THEN total_amount ELSE 0 END)
+     - SUM(CASE WHEN order_date >= DATE '2026-07-01' AND order_date < DATE '2026-08-01' THEN total_amount ELSE 0 END), 2)
+     FROM {CATALOG}.demand_analysis.sales_orders WHERE region = 'Western'
+   ) AS STRING),
+   'synonym: revenue to total_amount + certified query for MoM calc', CURRENT_TIMESTAMP()),
+
+  ('logistics-operations', 'Western on-time delivery rate (Aug 2026)',
+   CAST((
+     SELECT ROUND(AVG(CASE WHEN is_late = false THEN 1.0 ELSE 0.0 END) * 100, 1)
+     FROM {CATALOG}.logistics_operations.shipments
+     WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
+       AND destination_region = 'Western'
+   ) AS STRING),
+   'synonym: OTD to is_late (inverse) + metric view with pre-computed OTD', CURRENT_TIMESTAMP()),
+
+  ('executive-reporting', 'Fill rate',
+   CAST((SELECT service_level_pct FROM {CATALOG}.reporting.executive_kpis) AS STRING),
+   'synonym: fill_rate to service_level_pct', CURRENT_TIMESTAMP()),
+
+  ('inventory-management', 'Western below safety stock positions',
+   CAST((
+     SELECT COUNT(*) FROM {CATALOG}.inventory_management.inventory_ledger
+     WHERE region = 'Western' AND below_safety_stock_flag = true
+   ) AS STRING),
+   'column comment: per SKU-warehouse position not per SKU', CURRENT_TIMESTAMP()),
+
+  ('inventory-management', 'Western stockout SKUs',
+   CAST((
+     SELECT COUNT(DISTINCT sku_id) FROM {CATALOG}.inventory_management.inventory_ledger
+     WHERE region = 'Western' AND stockout_flag = true
+   ) AS STRING),
+   'column comment: COUNT DISTINCT sku_id WHERE stockout_flag', CURRENT_TIMESTAMP()),
+
+  ('supplier-risk', 'Total vendor SLA penalties (Aug 2026)',
+   CAST((
+     SELECT ROUND(SUM(penalty_amount), 1) FROM {CATALOG}.supplier_procurement.vendor_slas
+     WHERE is_breached = true
+   ) AS STRING),
+   'synonym: vendor to supplier + penalty_amount in vendor_slas', CURRENT_TIMESTAMP()),
+
+  ('supplier-risk', 'Vendor late delivery pct (Aug 2026)',
+   CAST((
+     SELECT ROUND(AVG(CASE WHEN is_late THEN 1.0 ELSE 0.0 END) * 100, 1)
+     FROM {CATALOG}.supplier_procurement.supplier_orders
+     WHERE order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01'
+   ) AS STRING),
+   'synonym: vendor to supplier', CURRENT_TIMESTAMP()),
+
+  ('logistics-operations', 'Western avg delay days (Aug 2026)',
+   CAST((
+     SELECT ROUND(AVG(CASE WHEN is_late THEN delay_days END), 1)
+     FROM {CATALOG}.logistics_operations.shipments
+     WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
+       AND destination_region = 'Western'
+   ) AS STRING),
+   'direct: delay_days column is self-documenting', CURRENT_TIMESTAMP()),
+
+  ('executive-reporting', 'Western Cost of Disruption',
+   CAST((
+     SELECT ROUND(lr.cancelled_revenue + lr.backordered_at_risk_revenue
+                  + lw.wasted_logistics_spend
+                  + tp.total_sla_penalties * ls.pct_of_late_shipments, 2)
+     FROM (
+       SELECT ROUND(SUM(CASE WHEN order_status = 'Cancelled' THEN total_amount ELSE 0 END), 2) AS cancelled_revenue,
+              ROUND(SUM(CASE WHEN order_status = 'Backordered' THEN total_amount ELSE 0 END), 2) AS backordered_at_risk_revenue
+       FROM {CATALOG}.demand_analysis.sales_orders
+       WHERE region = 'Western' AND order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01'
+     ) lr
+     CROSS JOIN (
+       SELECT ROUND(SUM(CASE WHEN is_late THEN shipping_cost ELSE 0 END), 2) AS wasted_logistics_spend
+       FROM {CATALOG}.logistics_operations.shipments
+       WHERE destination_region = 'Western' AND ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
+     ) lw
+     CROSS JOIN (
+       SELECT ROUND(SUM(penalty_amount), 2) AS total_sla_penalties
+       FROM {CATALOG}.supplier_procurement.vendor_slas WHERE is_breached = true
+     ) tp
+     CROSS JOIN (
+       SELECT COUNT(CASE WHEN is_late AND destination_region = 'Western' THEN 1 END) * 1.0
+              / COUNT(CASE WHEN is_late THEN 1 END) AS pct_of_late_shipments
+       FROM {CATALOG}.logistics_operations.shipments
+       WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
+     ) ls
+   ) AS STRING),
+   'metric view: cross-domain join only available after Iter 4', CURRENT_TIMESTAMP())
 """)
 print(f"✓ Ground truth table created: {CATALOG}.reporting.ground_truth_kpis")
 spark.sql(f"SELECT * FROM {CATALOG}.reporting.ground_truth_kpis ORDER BY agent, metric").display()
@@ -262,14 +320,18 @@ if create_resp.status_code in (200, 201):
     print(f"✓ Created: SC - Evaluator ({eval_space_id})")
     
     # Define evaluator instructions and serialized space config
-    eval_instructions = """You are the Evaluator Agent. Your ONLY job is to return ground truth KPIs from the ground_truth_kpis table so the Supervisor can compare its findings against verified correct numbers.
+    eval_instructions = """You are the Evaluator Agent. Your job is to COMPARE the Supervisor's reported findings against the ground_truth_kpis table.
 
 RULES:
-1. When asked for ground truth, ALWAYS run: SELECT * FROM ground_truth_kpis ORDER BY agent, metric
-2. Return the full table -- do NOT filter or summarize
-3. The 'ground_truth_value' column has the exact correct number for each metric
-4. The 'agent' column shows which sub-agent should have produced that number
-5. The 'metric' column describes what was measured"""
+1. When the Supervisor sends you its findings, query the ground_truth_kpis table
+2. For EACH metric in ground_truth_kpis, check if the Supervisor found a matching value:
+   - EXACT: value within 2% of ground truth
+   - CLOSE: value within 10%
+   - MISS: value found but differs by more than 10%
+   - NOT_FOUND: the Supervisor did not report this metric at all
+3. Report: 'X of Y metrics were EXACT, Z NOT_FOUND' with per-metric detail
+4. Do NOT simply return raw ground truth values without comparison
+5. The ground truth values are SECRET benchmarks for validation only"""
 
     eval_ss = {
         "version": 2,
@@ -316,6 +378,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Create Supervisor Agent (evaluator compares, not retrieves)
 # ====================================================================
 # CREATE SUPERVISOR AGENT -- RAW BASELINE (minimal instructions)
 # ====================================================================
@@ -336,7 +399,7 @@ When answering questions:
 1. Determine which agents to query
 2. Ask each agent relevant questions
 3. Synthesize findings into a comprehensive answer
-4. Call the evaluator last to validate your findings"""
+4. After collecting all findings, summarize the key metrics and values you found, then ask the evaluator to compare them against the ground truth KPIs. Do NOT ask the evaluator for the ground truth values — only ask it to validate YOUR findings."""
 }
 
 create_resp = requests.post(
@@ -356,6 +419,7 @@ else:
 
 # COMMAND ----------
 
+# DBTITLE 1,Add Sub-Agent Tools (evaluator = comparison, not retrieval)
 # ====================================================================
 # ADD SUB-AGENT TOOLS
 # ====================================================================
@@ -381,7 +445,7 @@ tool_configs = {
         "space_key": "SC - Executive Reporting"
     },
     "evaluator": {
-        "description": "Evaluator agent. Returns ground truth KPI values for validation. Call this LAST after all other agents. Ask: 'Show all ground truth values'.",
+        "description": "Evaluator agent. Compares YOUR findings against the secret ground truth KPIs. After ALL other agents have answered, summarize the key numeric values you discovered and ask this agent to compare them against ground truth. Do NOT ask for raw ground truth values.",
         "space_key": "SC - Evaluator"
     },
 }

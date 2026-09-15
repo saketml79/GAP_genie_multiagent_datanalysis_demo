@@ -178,9 +178,10 @@ synonyms_config = {
             {"column_name": "delay_days", "synonyms": ["days delayed", "days late"]},
             {"column_name": "delay_reason", "synonyms": ["cause of delay", "root cause"], "enable_format_assistance": True, "enable_entity_matching": True},
             {"column_name": "destination_region", "synonyms": ["region", "delivery region", "target region"], "enable_format_assistance": True, "enable_entity_matching": True},
-            {"column_name": "is_late", "synonyms": ["late", "delayed", "overdue"]},
+            {"column_name": "is_late", "synonyms": ["late", "delayed", "overdue", "on-time", "on time delivery", "OTD"]},
             {"column_name": "origin_region", "synonyms": ["source region", "ship from region"], "enable_format_assistance": True, "enable_entity_matching": True},
             {"column_name": "ship_date", "synonyms": ["shipment date", "date shipped"]},
+            {"column_name": "shipping_cost", "synonyms": ["freight cost", "logistics spend", "freight", "transport cost"]},
         ],
     },
     "SC - Supplier Risk": {
@@ -196,8 +197,17 @@ synonyms_config = {
         ],
         f"{CATALOG}.supplier_procurement.vendor_slas": [
             {"column_name": "is_breached", "synonyms": ["breached", "violated", "failed"]},
-            {"column_name": "penalty_amount", "synonyms": ["penalty", "fine"]},
+            {"column_name": "penalty_amount", "synonyms": ["penalty", "fine", "SLA penalty", "vendor penalty"]},
             {"column_name": "sla_metric", "synonyms": ["metric", "kpi", "measure"], "enable_entity_matching": True},
+            {"column_name": "supplier_id", "synonyms": ["vendor id", "vendor"]},
+            {"column_name": "supplier_name", "synonyms": ["vendor name", "vendor"]},
+        ],
+    },
+    "SC - Executive Reporting": {
+        f"{CATALOG}.reporting.executive_kpis": [
+            {"column_name": "late_delivery_pct_last_month", "synonyms": ["late delivery rate", "delivery delay rate"]},
+            {"column_name": "service_level_pct", "synonyms": ["fill rate", "fill_rate", "order fill rate", "service level"]},
+            {"column_name": "supplier_late_pct_last_month", "synonyms": ["vendor late rate", "supplier delay rate"]},
         ],
     },
 }
