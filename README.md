@@ -33,6 +33,60 @@ In this demo, we use a **ground truth table** — 10 pre-computed KPIs with know
 
 ---
 
+## The Business Scenario
+
+A **multi-regional retail company** sells 100 SKUs across 5 product families (Apparel, Accessories, Footwear, Home Goods, Electronics) through 4 US regions (Western, Eastern, Central, Southern). Products are sourced from 12 international suppliers across Asia, Europe, and North America, stored in 12 warehouses, and shipped via 8 carriers through 7 distribution centers.
+
+The company's data warehouse is organized in [Unity Catalog](https://docs.databricks.com/en/data-governance/unity-catalog/index.html) with 5 domain schemas — each owned by a different business team — plus a shared `reporting` schema for cross-domain executive views.
+
+### Data Model (Final State — after all 6 iterations)
+
+The demo generates 23 base tables (~130K total rows) and progressively adds 5 metric views + 1 cross-domain view through the improvement iterations.
+
+```mermaid
+graph TD
+    CAT["GAP_Demo_Dev\n(Unity Catalog)"]
+
+    CAT --> DA["demand_analysis\n6 tables + 1 metric view"]
+    CAT --> IM["inventory_management\n4 tables + 1 metric view"]
+    CAT --> LO["logistics_operations\n4 tables + 1 metric view"]
+    CAT --> SP["supplier_procurement\n5 tables + 1 metric view"]
+    CAT --> RP["reporting\n5 views + 1 table"]
+
+    DA --- DA_T["products \u00b7 customer_segments \u00b7 sales_orders\ndemand_forecasts \u00b7 pos_data \u00b7 promotions"]
+    DA --- DA_V["\ud83d\udcca revenue_comparison_by_region"]
+
+    IM --- IM_T["warehouse_data \u00b7 inventory_ledger\nstore_inventory \u00b7 stock_movements"]
+    IM --- IM_V["\ud83d\udcca inventory_safety_stock_metrics"]
+
+    LO --- LO_T["carriers \u00b7 distribution_centers\nshipments \u00b7 transit_data"]
+    LO --- LO_V["\ud83d\udcca delivery_performance_by_region"]
+
+    SP --- SP_T["suppliers \u00b7 supplier_orders\nsupplier_lead_times \u00b7 vendor_slas \u00b7 procurement_data"]
+    SP --- SP_V["\ud83d\udcca supplier_performance_by_continent"]
+
+    RP --- RP_V["executive_kpis \u00b7 regional_performance_summary\nrevenue_trend \u00b7 supply_chain_risk_scorecard\ncost_of_disruption_by_region \u00b7 ground_truth_kpis"]
+
+    style DA_V fill:#e1f5fe,stroke:#0288d1
+    style IM_V fill:#e1f5fe,stroke:#0288d1
+    style LO_V fill:#e1f5fe,stroke:#0288d1
+    style SP_V fill:#e1f5fe,stroke:#0288d1
+```
+
+**Metric views** (blue) are pre-computed summaries added in iterations 5–6. They encode the exact business definition in the column name (e.g., `sku_warehouse_positions_below_safety_stock` instead of an ambiguous `COUNT(*)`) — this is what eliminates the last sources of agent error.
+
+| Schema | Key Tables (bold = primary fact table) | Rows | Business Domain |
+|--------|---------------------------------------|------|----------------|
+| `demand_analysis` | products, customer_segments, **sales_orders**, demand_forecasts, pos_data, promotions | ~74K | Revenue, orders, demand forecasting |
+| `inventory_management` | warehouse_data, **inventory_ledger**, store_inventory, stock_movements | ~15K | Stock levels, stockouts, safety stock |
+| `logistics_operations` | carriers, distribution_centers, **shipments**, transit_data | ~38K | Delivery performance, delay tracking |
+| `supplier_procurement` | suppliers, **supplier_orders**, supplier_lead_times, vendor_slas, procurement_data | ~1.7K | Supplier reliability, SLA penalties |
+| `reporting` | executive_kpis, regional_performance_summary, revenue_trend, supply_chain_risk_scorecard, cost_of_disruption_by_region, ground_truth_kpis | Views | Cross-domain executive dashboards |
+
+All data is generated with a **fixed reference date** of September 1, 2026 (`base_date = datetime(2026, 9, 1)`). "Last month" = August 2026, "Prior month" = July 2026. The demo produces identical results every run.
+
+---
+
 ## The Two Test Prompts
 
 ### Prompt 1 — The Main Business Question (used for iterations 1–5)
