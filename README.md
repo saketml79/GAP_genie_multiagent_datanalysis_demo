@@ -19,9 +19,9 @@ Using a realistic supply chain scenario with 23 tables across 5 business domains
 
 ##### Ground Truth: Demo Proxy for Real-World Feedback
 
-In this demo, we use a **ground truth table** — 10 pre-computed KPIs with known correct values — to objectively measure whether the agents are generating the right SQL and returning the right numbers. After each improvement iteration, we compare the Supervisor's output against ground truth and score it (EXACT / CLOSE / MISS).
+> In this demo, we use a **ground truth table** — 10 pre-computed KPIs with known correct values — to objectively measure whether the agents are generating the right SQL and returning the right numbers. After each improvement iteration, we compare the Supervisor's output against ground truth and score it (EXACT / CLOSE / MISS).
 
-**In production, there is no ground truth table.** Instead, accuracy improves through an iterative **user feedback loop**:
+> **In production, there is no ground truth table.** Instead, accuracy improves through an iterative **user feedback loop**:
 
 1. A business user asks a question via a Genie Agent or Supervisor Agent
 2. The agent generates SQL and returns a result
@@ -29,7 +29,7 @@ In this demo, we use a **ground truth table** — 10 pre-computed KPIs with know
 4. A data team member reviews the feedback, identifies the root cause (wrong column, wrong filter, ambiguous metric), and applies a fix — exactly the same kinds of fixes shown in this demo (certified queries, synonyms, instructions, metric views)
 5. Over time, the agent gets better and better at answering questions correctly
 
-**This demo compresses months of user-feedback-driven improvement into 6 scripted iterations**, so you can see the full journey in a single workshop session. Every fix we apply (certified queries, synonyms, metric views, business definitions) is the same fix a data team would apply in response to real user feedback.
+> **This demo compresses months of user-feedback-driven improvement into 6 scripted iterations**, so you can see the full journey in a single workshop session. Every fix we apply (certified queries, synonyms, metric views, business definitions) is the same fix a data team would apply in response to real user feedback.
 
 ---
 
