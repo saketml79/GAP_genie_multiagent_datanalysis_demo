@@ -110,7 +110,7 @@ for month_offset in range(12):
             'contracted_lead_time_days': contracted,
             'avg_actual_lead_time_days': round(actual_avg, 1),
             'lead_time_variance_days': round(actual_avg - contracted, 1),
-            'on_time_delivery_pct': round(max(30, 100 - (actual_avg - contracted) * 8), 1),
+            'on_time_delivery_pct': round(max(30.0, 100.0 - (actual_avg - contracted) * 8), 1),
             'order_count': random.randint(5, 30),
             'defect_rate_pct': round(random.uniform(0.5, 8.0), 1)
         })

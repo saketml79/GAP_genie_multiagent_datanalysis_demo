@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Supply Chain Control Tower — Full Pipeline
 # MAGIC
@@ -30,8 +34,8 @@
 # COMMAND ----------
 
 # DBTITLE 1,Parameters
-dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
-dbutils.widgets.text("warehouse_id", "bf50738cf2819197", "SQL Warehouse ID")
+dbutils.widgets.text("catalog_name", "", "Catalog Name")
+dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID")
 dbutils.widgets.dropdown("run_mode", "full", ["full", "skip_teardown", "iterations_only"], "Run Mode")
 
 CATALOG = dbutils.widgets.get("catalog_name")
@@ -278,28 +282,46 @@ verification_history.append(verify_ground_truth("Baseline (after 08_setup)"))
 
 # COMMAND ----------
 
-# DBTITLE 1,Steps 10-14: Progressive Improvement Iterations
-# Each iteration improves the Supervisor's accuracy:
-#   Baseline (08_setup):     ~30% (3/10 EXACT)
-#   + Certified Queries:     ~20% (2/10) — worse! (overfitting to wrong patterns)
-#   + Synonyms/Instructions: ~50% (5/10)
-#   + Supervisor Hardening:  ~90% (9/10)
-#   + Metric Views/Glossary: 100% (10/10)
-#   + Cost of Disruption:    100% (11/11) — cross-domain governance
+# DBTITLE 1,Step 10: Iteration 02 — Certified Queries (expect ~20%)
+# Certified queries can actually HURT accuracy if they encode wrong patterns.
+# Expected: ~20% (2/10) — WORSE than baseline.
+run_notebook("improvements/iteration_02_certified_queries", timeout=300)
+verification_history.append(verify_ground_truth("After iteration_02 (certified queries)"))
 
-iterations = [
-    ("improvements/iteration_02_certified_queries", "After iteration_02 (certified queries)"),
-    ("improvements/iteration_03_column_synonyms", "After iteration_03 (synonyms + instructions)"),
-    ("improvements/iteration_04_supervisor_hardening", "After iteration_04 (supervisor hardening)"),
-    ("improvements/iteration_05_metric_views_glossary", "After iteration_05 (metric views + glossary)"),
-    ("improvements/iteration_06_cost_of_disruption", "After iteration_06 (cost of disruption + UC governance)"),
-]
+# COMMAND ----------
 
-for iteration, stage_label in iterations:
-    run_notebook(iteration, timeout=300)
-    verification_history.append(verify_ground_truth(stage_label))
+# DBTITLE 1,Step 11: Iteration 03 — Synonyms + Instructions (expect ~50%)
+# Column synonyms + enhanced instructions teach agents how to interpret business terms.
+# Expected: ~50% (5/10).
+run_notebook("improvements/iteration_03_column_synonyms", timeout=300)
+verification_history.append(verify_ground_truth("After iteration_03 (synonyms + instructions)"))
 
-print("\n✓ All 5 iterations applied")
+# COMMAND ----------
+
+# DBTITLE 1,Step 12: Iteration 04 — Supervisor Hardening (expect ~90%)
+# Hardened supervisor instructions with strict routing rules, month-name mandate,
+# and 7-section output format. Biggest single jump in accuracy.
+# Expected: ~90% (9/10).
+run_notebook("improvements/iteration_04_supervisor_hardening", timeout=300)
+verification_history.append(verify_ground_truth("After iteration_04 (supervisor hardening)"))
+
+# COMMAND ----------
+
+# DBTITLE 1,Step 13: Iteration 05 — Metric Views + Glossary (expect 100%)
+# Metric views encode exact business definitions in the column name.
+# UC tags + glossary eliminate the last ambiguity (COUNT(*) vs COUNT(DISTINCT)).
+# Expected: 100% (10/10).
+run_notebook("improvements/iteration_05_metric_views_glossary", timeout=300)
+verification_history.append(verify_ground_truth("After iteration_05 (metric views + glossary)"))
+
+# COMMAND ----------
+
+# DBTITLE 1,Step 14: Iteration 06 — Cost of Disruption (expect 100% on 11)
+# Cross-domain Cost of Disruption view + UC governance + 11th ground truth row.
+# Tests whether the system can answer a NEW question it's never seen.
+# Expected: 100% (11/11).
+run_notebook("improvements/iteration_06_cost_of_disruption", timeout=300)
+verification_history.append(verify_ground_truth("After iteration_06 (cost of disruption + UC governance)"))
 
 # COMMAND ----------
 

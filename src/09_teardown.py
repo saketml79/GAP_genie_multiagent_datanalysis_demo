@@ -1,23 +1,18 @@
 # Databricks notebook source
-# COMMAND ----------
 # MAGIC %md
 # MAGIC # Teardown: Remove All Demo Resources
 # MAGIC **WARNING**: This will permanently delete the catalog, all Genie Spaces, and the Supervisor Agent.
 # MAGIC Run this to clean up a deployment before redeploying, or to remove the demo entirely.
 
 # COMMAND ----------
-dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
-dbutils.widgets.text("confirm", "no", "Type YES to confirm deletion")
-CATALOG = dbutils.widgets.get("catalog_name")
-CONFIRM = dbutils.widgets.get("confirm")
 
-if CONFIRM.upper() != "YES":
-    print("Aborted. Set confirm=YES to proceed with teardown.")
-    dbutils.notebook.exit("Aborted - confirmation required")
+dbutils.widgets.text("catalog_name", "", "Catalog Name")
+CATALOG = dbutils.widgets.get("catalog_name")
 
 print(f"TEARDOWN STARTING for {CATALOG}")
 
 # COMMAND ----------
+
 import requests, json
 
 try:
@@ -32,6 +27,7 @@ except:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 # COMMAND ----------
+
 # ---- Delete Supervisor Agents ----
 resp = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers)
 if resp.status_code == 200:
@@ -43,6 +39,7 @@ if resp.status_code == 200:
             print(f"{status} Deleted supervisor: {agent['display_name']}")
 
 # COMMAND ----------
+
 # ---- Delete Genie Spaces ----
 resp = requests.get(f"{host}/api/2.0/genie/spaces", headers=headers)
 if resp.status_code == 200:
@@ -54,6 +51,7 @@ if resp.status_code == 200:
             print(f"{status} Deleted space: {space['title']}")
 
 # COMMAND ----------
+
 # ---- Drop Catalog (CASCADE) ----
 try:
     spark.sql(f"DROP CATALOG IF EXISTS {CATALOG} CASCADE")

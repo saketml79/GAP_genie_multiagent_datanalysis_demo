@@ -17,7 +17,7 @@ Using a realistic supply chain scenario with 23 tables across 5 business domains
 
 **[Supervisor Agents](https://docs.databricks.com/en/generative-ai/agent-framework/build-supervisor-agent.html)** orchestrate multiple sub-agents (including Genie Agents) as tools. The Supervisor receives a complex question, decides which sub-agents to call and in what order, synthesizes their results, and produces a unified answer. This enables cross-domain analysis that no single agent could perform alone.
 
-### Ground Truth: Demo Proxy for Real-World Feedback
+##### Ground Truth: Demo Proxy for Real-World Feedback
 
 In this demo, we use a **ground truth table** — 10 pre-computed KPIs with known correct values — to objectively measure whether the agents are generating the right SQL and returning the right numbers. After each improvement iteration, we compare the Supervisor's output against ground truth and score it (EXACT / CLOSE / MISS).
 
