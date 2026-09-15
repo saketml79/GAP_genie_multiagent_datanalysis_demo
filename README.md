@@ -1,112 +1,347 @@
-# Supply Chain Genie Agent Workshop
+# Supply Chain Control Tower — Multi-Agent Genie Workshop
 
-A Databricks Asset Bundle (DAB) that deploys a complete supply chain analytics platform with multi-agent AI orchestration.
+## What This Demo Proves
+
+Enterprise data warehouses and data marts contain the answers to complex business questions — but AI agents often **hallucinate**, **misinterpret column names**, or **generate incorrect SQL** when querying that data. This demo shows how to build AI-powered data analysis agents on Databricks that are **grounded to business truth** and **consistently generate correct queries** across a multi-domain supply chain data warehouse — without hallucination.
+
+Using a realistic supply chain scenario with 23 tables across 5 business domains, this workshop:
+
+- Builds a **Supervisor Agent** that orchestrates 5 domain-specific **Genie Agents** to answer complex cross-domain business questions
+- Starts at **30% accuracy** with a minimal baseline and progressively improves to **100% accuracy** across 6 iterations
+- Demonstrates **why each improvement matters**: certified queries, column synonyms, agent instructions, supervisor hardening, metric views, and business definitions
+- Shows that the last mile of accuracy requires **data governance** (formal business definitions, Unity Catalog tags, metric views) — not just better prompts
+
+### What Are Genie Agents and Supervisor Agents?
+
+**[Genie Agents](https://docs.databricks.com/en/genie/index.html)** (formerly called Genie Spaces) are AI-powered data analysis agents in Databricks. You give them access to specific tables, and they translate natural-language questions into SQL, execute the query, and return results. They can be enhanced with certified queries, column synonyms, and instructions to improve accuracy.
+
+**[Supervisor Agents](https://docs.databricks.com/en/generative-ai/agent-framework/build-supervisor-agent.html)** orchestrate multiple sub-agents (including Genie Agents) as tools. The Supervisor receives a complex question, decides which sub-agents to call and in what order, synthesizes their results, and produces a unified answer. This enables cross-domain analysis that no single agent could perform alone.
+
+### Ground Truth: Demo Proxy for Real-World Feedback
+
+In this demo, we use a **ground truth table** — 10 pre-computed KPIs with known correct values — to objectively measure whether the agents are generating the right SQL and returning the right numbers. After each improvement iteration, we compare the Supervisor's output against ground truth and score it (EXACT / CLOSE / MISS).
+
+**In production, there is no ground truth table.** Instead, accuracy improves through an iterative **user feedback loop**:
+
+1. A business user asks a question via a Genie Agent or Supervisor Agent
+2. The agent generates SQL and returns a result
+3. The user reviews the result and provides feedback: 👍 (correct) or 👎 (wrong)
+4. A data team member reviews the feedback, identifies the root cause (wrong column, wrong filter, ambiguous metric), and applies a fix — exactly the same kinds of fixes shown in this demo (certified queries, synonyms, instructions, metric views)
+5. Over time, the agent gets better and better at answering questions correctly
+
+**This demo compresses months of user-feedback-driven improvement into 6 scripted iterations**, so you can see the full journey in a single workshop session. Every fix we apply (certified queries, synonyms, metric views, business definitions) is the same fix a data team would apply in response to real user feedback.
+
+---
+
+## The Two Test Prompts
+
+### Prompt 1 — The Main Business Question (used for iterations 1–5)
+
+> **"Why did revenue drop in the Western Region last month, are we going to miss our quarterly service-level targets, and what immediate actions should we take?"**
+
+This question requires investigation across all 5 domains (demand, inventory, logistics, suppliers, executive KPIs). The Supervisor must call multiple Genie Agents, reconcile their findings, and produce a structured executive brief. After 5 iterations, the system achieves 100% accuracy on 10 ground truth KPIs.
+
+### Prompt 2 — The Follow-Up That Breaks the System (used for iteration 6)
+
+> **"What is our total Cost of Disruption by region last month — combining lost revenue from cancellations, at-risk backorder revenue, supplier SLA penalties, and wasted logistics spend on late shipments?"**
+
+After reaching 100%, this new question **cannot be answered** because:
+- "Cost of Disruption" is undefined in any schema, comment, synonym, or certified query
+- It requires joining 3 schemas (`demand_analysis` + `logistics_operations` + `supplier_procurement`)
+- No single Genie Agent has visibility across all three domains
+- The Supervisor collects text answers — it cannot JOIN or SUM across agents
+
+**Iteration 6** fixes this by creating a formal business definition (UC comments + tags), a cross-domain metric view, and a certified query — demonstrating that **data governance is the answer, not better prompts**.
 
 ## Architecture
 
 ```
 Supervisor Agent ("Supply Chain Control Tower")
-    ├─ Demand Analysis Agent        → Genie Space (6 tables)
-    ├─ Inventory Management Agent   → Genie Space (4 tables)
-    ├─ Logistics Operations Agent   → Genie Space (4 tables)
-    ├─ Supplier Risk Agent          → Genie Space (5 tables)
-    └─ Executive Reporting Agent    → Genie Space (4 views)
+    ├─ Demand Analysis Agent        → Genie Agent (6 tables + 1 metric view)
+    ├─ Inventory Management Agent   → Genie Agent (4 tables + 1 metric view)
+    ├─ Logistics Operations Agent   → Genie Agent (4 tables + 1 metric view)
+    ├─ Supplier Risk Agent          → Genie Agent (5 tables + 1 metric view)
+    ├─ Executive Reporting Agent    → Genie Agent (4 views + 1 metric view)
+    └─ Evaluator Agent              → Genie Agent (1 table: ground_truth_kpis)
 ```
 
-## What Gets Created
+## The Demo Story
 
-| Component | Count | Details |
-| --- | --- | --- |
-| Unity Catalog | 1 catalog, 5 schemas | `GAP_Demo_{env}` with demand, inventory, logistics, supplier, reporting |
-| Tables | 19 base tables | ~100K+ rows of synthetic supply chain data |
-| Views | 4 reporting views | Cross-domain KPIs, regional summary, revenue trend, risk scorecard |
-| Genie Spaces | 5 | Domain-specific with instructions, table descriptions, column synonyms |
-| Supervisor Agent | 1 | Orchestrates all 5 Genie agents with structured response format |
-| Table/Column Comments | 19 tables, 180+ columns | Semantic descriptions for Genie agent accuracy |
+A cascading supply chain failure:
 
-## Demo Story (Embedded in Data)
+1. **Asian suppliers** are 100% late (30/30 POs, +13.7 day average lead-time variance)
+2. **Western inventory** collapses (33 stockouts, 109 SKU-warehouse positions below safety stock)
+3. **Western logistics** breaks down (94.6% late delivery rate, 1,027 of 1,086 shipments late)
+4. **Western revenue** drops ~$1.24M (-27.1%) as customers get backordered, partially fulfilled, or cancelled orders
+5. **Company service level** falls to 70.4% — quarterly 95% target at CRITICAL RISK
 
-- **Western Region revenue drops ~30%** in the last 30 days (price reductions + higher backorder rates)
-- **Western Apparel inventory critically low** (0-15 units, 12% stockout rate)
-- **Western-bound shipments 42%+ late** (port congestion, carrier capacity issues)
-- **Asian suppliers delayed +5-18 days** (SUP-001 TextilePro Asia worst: factory shutdowns)
-- **Forecast model over-predicted Western demand by 35%**
+The Supervisor Agent investigates all 5 domains and produces a structured executive brief with root cause analysis, cross-domain reconciliation, and a prioritized action plan.
 
-## Deployment
+---
 
-### Prerequisites
+## Quick Start
 
-- Databricks CLI installed and authenticated
-- A SQL Warehouse running in the target workspace
-- Permissions to create Unity Catalog objects
+### Option A: One-Click Pipeline (recommended)
 
-### Deploy to Dev
+Run the master orchestrator notebook. It handles everything: teardown, data generation, agent creation, all 6 iterations, and verification.
 
-```bash
-cd GAP_genie_multiagent_datanalysis_demo
-databricks bundle deploy --target dev
-databricks bundle run supply_chain_demo_setup --target dev
-```
+| Notebook | Description |
+|----------|-------------|
+| `src/notebooks/00_run_all.py` | Runs teardown → create → generate → setup → all iterations → verify. Discovers the supervisor endpoint dynamically. |
 
-### Deploy to Other Environments
+Widgets:
+- `catalog_name` (default: `GAP_Demo_Dev`)
+- `warehouse_id` — set this to your SQL Warehouse ID
+- `run_mode`: `full` (teardown + rebuild), `skip_teardown`, or `iterations_only`
 
-```bash
-# Staging
-databricks bundle deploy --target staging
-databricks bundle run supply_chain_demo_setup --target staging
+The notebook runs `verify_ground_truth()` after each stage so you can see the accuracy progression live.
 
-# Production
-databricks bundle deploy --target prod
-databricks bundle run supply_chain_demo_setup --target prod
-```
+### Option B: Step-by-Step (for workshop presentation)
 
-### Configuration
+#### Prerequisites
 
-Edit `databricks.yml` to set per-environment values:
+- Databricks workspace with [Unity Catalog](https://docs.databricks.com/en/data-governance/unity-catalog/index.html) enabled
+- A running [SQL Warehouse](https://docs.databricks.com/en/compute/sql-warehouse/index.html) (note the warehouse ID from the SQL Warehouses page)
+- Permission to create catalogs, schemas, and tables
+- Each script takes a `catalog_name` widget (default: `GAP_Demo_Dev`)
+- `08_setup_genie_supervisor.py` also takes a `warehouse_id` widget
 
-- `catalog_name`: Unity Catalog name (default: `GAP_Demo_Dev`)
-- `warehouse_id`: SQL Warehouse ID for Genie Spaces
+#### Step 1: Build the Data Layer (run once)
 
-### Teardown
+Open each notebook in the Databricks UI and **Run All**, in order:
 
-Run the teardown script to remove all resources:
+| # | Script | What It Does | Time |
+|---|--------|-------------|------|
+| 1 | `src/01_create_catalog_schemas.py` | Creates catalog + 5 schemas | ~10s |
+| 2 | `src/02_generate_demand_data.py` | 6 tables: products, customers, sales_orders, forecasts, POS, promotions | ~30s |
+| 3 | `src/03_generate_inventory_data.py` | 4 tables: warehouses, inventory_ledger, store_inventory, stock_movements | ~20s |
+| 4 | `src/04_generate_logistics_data.py` | 4 tables: carriers, distribution_centers, shipments, transit_data | ~20s |
+| 5 | `src/05_generate_supplier_data.py` | 5 tables: suppliers, supplier_orders, lead_times, SLAs, procurement | ~20s |
+| 6 | `src/06_create_reporting_views.py` | 4 views: executive_kpis, regional_performance, revenue_trend, risk_scorecard | ~10s |
+| 7 | `src/07_add_all_comments.py` | Adds table + column comments (180+ columns) for Genie accuracy | ~30s |
 
-```bash
-databricks bundle run supply_chain_demo_setup --target dev \
-  --python-params '{"catalog_name": "GAP_Demo_Dev", "confirm": "YES"}'
-```
+**Result**: 19 tables + 4 views across 5 schemas in `GAP_Demo_Dev`.
 
-Or run `src/09_teardown.py` manually as a notebook.
+#### Step 2: Create the Baseline Agents
+
+| # | Script | What It Does |
+|---|--------|-------------|
+| 8 | `src/08_setup_genie_supervisor.py` | Creates 5 domain Genie Agents + 1 Evaluator Agent + ground truth table + Supervisor Agent with 6 tools |
+
+Set the `warehouse_id` widget to your SQL Warehouse ID before running.
+
+This creates a **deliberately minimal** baseline:
+- Genie Agents have tables but **no** certified queries, synonyms, or enhanced instructions
+- Supervisor has basic instructions — no structured format, no specific question phrasings
+- Expected accuracy: **~30%** (3 of 10 ground truth metrics match)
+
+**Test it now** — go to the [Agents playground](https://docs.databricks.com/en/large-language-models/llm-serving-intro.html) and send **Prompt 1** (the main business question from above). The Supervisor will try but produce inconsistent, partially incorrect results.
+
+#### Step 3: Baseline Assessment (optional)
+
+| # | Script | What It Does |
+|---|--------|-------------|
+| - | `src/improvements/iteration_01_baseline_assessment.py` | Runs ground truth SQL, documents correct values, shows what the baseline gets wrong |
+
+This is read-only — it doesn't change any agents. It establishes the scoreboard.
+
+#### Step 4: Progressive Improvement (the core demo)
+
+Run each iteration notebook **in order**. After each one, invoke the Supervisor with **Prompt 1** to see the improvement.
+
+##### Iteration 2: Certified Queries → ~20% accuracy (WORSE)
+
+| # | Script | What It Does |
+|---|--------|-------------|
+| - | `src/improvements/iteration_02_certified_queries.py` | Adds 20 certified SQL queries across 5 domain Genie Agents |
+
+**What changed**: Each Genie Agent now has pre-built SQL patterns with correct columns and calendar-month time windows.
+
+**Why it got WORSE**: Certified queries only fire when the question matches the pattern. The Supervisor still asks vague questions like "Tell me about Western revenue" which don't trigger the certified SQL. The certified patterns may even confuse Genie when non-matching questions arrive.
+
+**Key insight**: Optimizing sub-agents without optimizing the orchestrator is counterproductive.
+
+##### Iteration 3: Enhanced Instructions + Synonyms → ~50% accuracy
+
+| # | Script | What It Does |
+|---|--------|-------------|
+| - | `src/improvements/iteration_03_column_synonyms.py` | Adds enhanced domain instructions + 107 column synonyms to all 5 Genie Agents |
+
+**What changed**:
+- Enhanced instructions tell each agent: "last month = calendar month boundaries (DATE_TRUNC)"
+- Schema notes: "shipments has destination_region, NOT region"
+- 107 column synonyms: "revenue" → total_amount, "late" → is_late, etc.
+- Logistics synonyms: "region" → destination_region
+
+**Why it jumped to 50%**: Agents now understand time periods and correct columns. But the Supervisor still phrases some questions poorly.
+
+##### Iteration 4: Supervisor Hardening → ~90% accuracy (9/10)
+
+| # | Script | What It Does |
+|---|--------|-------------|
+| - | `src/improvements/iteration_04_supervisor_hardening.py` | Updates Supervisor instructions (7-section mandatory format) + tool descriptions with exact question phrasings |
+
+**What changed**:
+- Mandatory 7-section output format (Findings, Reconciliation, Root Cause Chain, Scorecard, Actions)
+- Tool descriptions now mandate EXACT questions: e.g., "Show revenue by region comparing last month to prior month"
+- Evaluator agent called LAST to validate all findings against ground truth
+- Structured action tables with owners, targets, and timelines
+
+**Why 90% (not 100%)**: The Supervisor asks the right questions and 9 of 10 metrics match exactly. However, "Western below safety stock" still misses: the Genie Agent returns 61 (COUNT DISTINCT sku_id) while ground truth is 109 (COUNT of all SKU-warehouse positions). This is a **metric definition ambiguity** that certified queries and synonyms alone cannot resolve.
+
+##### Iteration 5: Metric Views + Business Glossary → 100% accuracy
+
+| # | Script | What It Does |
+|---|--------|-------------|
+| - | `src/improvements/iteration_05_metric_views_glossary.py` | Creates 4 metric views, adds them to Genie Agents with certified queries, UC tags, and column-level examples |
+
+**What changed**:
+- 4 **metric views** with unambiguous column names (e.g., `sku_warehouse_positions_below_safety_stock` = 109)
+- **Column comments with format examples** (e.g., "Example value: 109")
+- **Table comments with business definitions** ("Use sku_warehouse_positions, not unique_skus")
+- **UC Tags** for governance (`domain=inventory`, `metric_type=safety_stock`, `data_quality=authoritative`)
+- Certified queries that reference metric views instead of base tables
+- Updated inventory agent instructions to prefer the metric view
+- Updated supervisor tool description to ask about "SKU-warehouse positions"
+
+**Why 100%**: The metric view eliminates the ambiguity entirely. The column name IS the metric definition — there's no way for the agent to misinterpret `sku_warehouse_positions_below_safety_stock`.
+
+**Key insight**: When a metric has multiple valid interpretations (COUNT vs COUNT DISTINCT), the only reliable fix is a **pre-computed metric view** that encodes the exact business definition in the column name itself.
+
+##### Iteration 6: Cost of Disruption → 100% accuracy (11/11)
+
+| # | Script | What It Does |
+|---|--------|-------------|
+| - | `src/improvements/iteration_06_cost_of_disruption.py` | Creates cross-domain CoD view + UC tags + rich business definitions + certified query + 11th ground truth |
+
+**Now test Prompt 2** (the Cost of Disruption follow-up question from above). Before iteration 6, the system fails completely. After iteration 6, it returns the correct cross-domain metric.
+
+**Key insight**: Even a 100%-accurate system breaks when asked a question involving an undefined business concept. The fix is governance — formal business definitions, cross-domain metric views, and UC documentation — not better SQL or smarter instructions.
+
+#### Step 5: Run the Visual Demo
+
+| # | Script | What It Does |
+|---|--------|-------------|
+| - | `src/10_demo_runner.py` | Generates plotly charts from live data + invokes the Supervisor + scores against ground truth |
+
+Or invoke the Supervisor directly from the [Agents playground](https://docs.databricks.com/en/large-language-models/llm-serving-intro.html) with **Prompt 1** or **Prompt 2** from above.
+
+> **Note on visualizations**: Genie Agents produce interactive charts when used standalone in the Genie UI. When called as tools by a Supervisor Agent via API, they return structured data tables. The `10_demo_runner.py` generates plotly charts from the same underlying data to provide the visual layer.
+
+#### Step 6: Teardown (when done)
+
+| # | Script | What It Does |
+|---|--------|-------------|
+| 9 | `src/09_teardown.py` | Deletes all Genie Agents, Supervisor Agent, and drops the entire catalog |
+
+---
+
+## Progressive Improvement Summary
+
+| Stage | Script | What Changed | Accuracy |
+|-------|--------|-------------|----------|
+| **Baseline** | `08_setup` | Minimal instructions, no CQs, no synonyms | **~30%** (3/10) |
+| **+ Certified Queries** | `iteration_02` | 20 SQL patterns added to Genie Agents | **~20%** (2/10) — worse! |
+| **+ Synonyms + Instructions** | `iteration_03` | 107 synonyms + calendar-month rules | **~50%** (5/10) |
+| **+ Supervisor Hardening** | `iteration_04` | 7-section format + exact question phrasings | **~90%** (9/10) |
+| **+ Metric Views + Glossary** | `iteration_05` | Pre-computed views with examples + UC tags | **100%** (10/10) |
+| **+ Cost of Disruption** | `iteration_06` | Cross-domain view + UC tags + business definitions | **100%** (11/11) |
+
+## Expected Output (after iteration 5)
+
+The Supervisor produces a structured 7-section executive brief:
+
+1. **What I Understood** — restates the business question
+2. **Investigation Plan** — lists which agents to query and exact questions
+3. **Findings by Agent** — for each of 5 agents: questions asked, SQL used, result summary, confidence
+4. **Cross-Domain Reconciliation** — table comparing metrics across agents + ground truth
+5. **Root Cause Chain** — numbered causal cascade: Supplier → Inventory → Logistics → Revenue → Service Level
+6. **Ground Truth Comparison Scorecard** — 10-row table: Agent Finding vs Ground Truth vs Match
+7. **Conclusion and Actions** — direct answer + immediate actions (table) + medium-term actions (table) + KPIs to monitor + risk assessment
+
+## Ground Truth KPIs (10 + 1)
+
+These are dynamically computed from the live data using calendar-month boundaries:
+
+| Agent | Metric | Source |
+|-------|--------|--------|
+| demand-analysis | Western revenue change (MoM with dynamic month names) | sales_orders |
+| inventory-management | Western stockout SKUs | inventory_ledger |
+| inventory-management | Western below safety stock (COUNT of SKU-warehouse positions) | inventory_ledger |
+| logistics-operations | Western late delivery rate (dynamic month name) | shipments (destination_region) |
+| logistics-operations | Western avg delay days (dynamic month name) | shipments |
+| supplier-risk | Asia supplier late rate (dynamic month name) | supplier_orders |
+| supplier-risk | Asia avg lead time variance (dynamic month name) | supplier_orders |
+| executive-reporting | Service level pct | executive_kpis view |
+| executive-reporting | Supplier late pct (dynamic month name) | executive_kpis view |
+| executive-reporting | Total stockout SKUs | executive_kpis view |
+| executive-reporting | Western Cost of Disruption *(added by iteration 6)* | cost_of_disruption_by_region view |
+
+> **Note**: All time-based metrics include actual month names (e.g., "Aug 2026 vs Jul 2026 MoM") generated dynamically via `DATE_FORMAT`. The demo works regardless of when it is run.
 
 ## File Structure
 
 ```
-├── databricks.yml                              # Bundle config with dev/staging/prod targets
-├── README.md                                   # This file
+├── databricks.yml                               # DAB config (catalog, warehouse per env)
+├── README.md                                    # This file
 ├── resources/
-│   └── supply_chain_job.yml                    # Job resource definition (8-task pipeline)
+│   └── supply_chain_job.yml                     # Job definition (optional DAB deployment)
 └── src/
-    ├── 01_create_catalog_schemas.py             # Create catalog + 5 schemas
-    ├── 02_generate_demand_data.py               # Products, customers, sales orders, forecasts, POS, promotions
-    ├── 03_generate_inventory_data.py            # Warehouses, inventory ledger, store inventory, stock movements
-    ├── 04_generate_logistics_data.py            # Carriers, DCs, shipments, transit events
-    ├── 05_generate_supplier_data.py             # Suppliers, POs, lead times, SLAs, procurement
-    ├── 06_create_reporting_views.py             # 4 cross-domain reporting views
-    ├── 07_add_all_comments.py                  # Table + column comments (180+ columns)
-    ├── 08_setup_genie_supervisor.py             # 5 Genie Spaces + Supervisor Agent + examples
-    ├── 09_teardown.py                           # Clean removal of all resources
-    ├── improvements/                            # Iterative quality improvement demos
-    │   ├── iteration_01_baseline_assessment.py   # Document baseline issues + ground truth
-    │   ├── iteration_02_certified_queries.py     # Add pre-built SQL to Genie Spaces
-    │   ├── iteration_03_synonyms_and_samples.py  # Add column synonyms + entity matching
-    │   ├── iteration_04_benchmarks.py            # Automated validation test suite
-    │   └── iteration_05_consistency_traceability.py # Cross-agent reconciliation + traceability
+    ├── 01_create_catalog_schemas.py              # Catalog + 5 schemas
+    ├── 02_generate_demand_data.py                # 6 demand tables (~74K rows)
+    ├── 03_generate_inventory_data.py             # 4 inventory tables (~15K rows)
+    ├── 04_generate_logistics_data.py             # 4 logistics tables (~38K rows)
+    ├── 05_generate_supplier_data.py              # 5 supplier tables (~1.7K rows)
+    ├── 06_create_reporting_views.py              # 4 cross-domain views
+    ├── 07_add_all_comments.py                   # 180+ column comments
+    ├── 08_setup_genie_supervisor.py              # Raw baseline: 6 Genie Agents + Supervisor
+    ├── 09_teardown.py                            # Full cleanup
+    ├── 10_demo_runner.py                         # Charts + supervisor invocation + scoring
+    ├── improvements/
+    │   ├── iteration_01_baseline_assessment.py    # Ground truth + error documentation
+    │   ├── iteration_02_certified_queries.py      # 20 certified SQL patterns
+    │   ├── iteration_03_column_synonyms.py        # 107 synonyms + enhanced instructions
+    │   ├── iteration_04_supervisor_hardening.py   # 7-section format + exact phrasings
+    │   ├── iteration_05_metric_views_glossary.py  # Metric views + UC tags + examples
+    │   └── iteration_06_cost_of_disruption.py     # Cross-domain CoD view + UC governance
     └── notebooks/
-        └── expected_output_reference.py          # Gold standard: correct output for demo prompt
+        ├── 00_run_all.py                          # One-click full pipeline orchestrator
+        └── expected_output_reference.py           # Reference output for validation
 ```
 
-## Test Prompt
+## Data Determinism
 
-After deployment, test the Supervisor Agent with:
+All data generation scripts use a **fixed reference date** (`base_date = datetime(2026, 9, 1)`) and fixed random seeds (42/43/44/45), following the same approach as standard Databricks training demos. This produces **identical data every run**, regardless of when the demo is executed.
 
-> "Our VP of Operations just asked: Why did revenue drop in the Western Region last month, are we going to miss our quarterly service-level targets, and what immediate actions should we take? Investigate every dimension -- demand, inventory, logistics, suppliers, and overall KPIs."
+"Last month" = August 2026, "Prior month" = July 2026. All SQL views, certified queries, Genie Agent instructions, and ground truth use `DATE '2026-09-01'` instead of `CURRENT_DATE()`, so the demo is fully self-contained and never needs data regeneration.
+
+---
+
+## Configuration
+
+Edit `databricks.yml` to set per-environment values:
+
+- `catalog_name`: Unity Catalog name (default: `GAP_Demo_Dev`)
+- `warehouse_id`: SQL Warehouse ID for Genie Agents
+
+## Technical Notes
+
+- **"Last month" = calendar month**: All SQL uses `DATE_TRUNC('month', ADD_MONTHS(CURRENT_DATE(), -1))` for last month and `-2` for prior month. Never rolling 30-day windows.
+- **Genie API race condition**: After creating a Genie Agent, tables may not persist on the first PATCH. Scripts include retry logic.
+- **Metric ambiguity**: When base tables have multiple rows per entity (e.g., one SKU in 3 warehouses), `COUNT(*)` and `COUNT(DISTINCT)` give different answers. Metric views resolve this by encoding the exact definition in the column name.
+- **Tables must be sorted alphabetically** in `serialized_space.data_sources.tables`.
+- **Supervisor requires a `description` field** or invocation fails.
+- **Endpoint name format**: `mas-{short-uuid}-endpoint` (first 8 chars of the supervisor UUID).
+- **Shipments table**: Has `destination_region` and `origin_region` but NO `region` column — this is the #1 trap.
+- **Supplier data**: Organized by `supplier_continent` (Asia/Europe/North America), NOT by domestic region.
+
+---
+
+## Learn More
+
+- **[Genie Agents](https://docs.databricks.com/en/genie/index.html)** — AI-powered data analysis agents that translate natural-language questions into SQL
+- **[Supervisor Agents](https://docs.databricks.com/en/generative-ai/agent-framework/build-supervisor-agent.html)** — Multi-agent orchestrators that coordinate multiple sub-agents as tools
+- **[Unity Catalog](https://docs.databricks.com/en/data-governance/unity-catalog/index.html)** — Unified governance for data and AI assets on Databricks
+- **[SQL Warehouses](https://docs.databricks.com/en/compute/sql-warehouse/index.html)** — Serverless or provisioned compute for running SQL queries
+- **[Databricks Agent Framework](https://docs.databricks.com/en/generative-ai/agent-framework/index.html)** — End-to-end tools for building, deploying, and monitoring AI agents
+- **[Certified Queries](https://docs.databricks.com/en/genie/certified-queries.html)** — Pre-built SQL patterns that ground Genie Agent responses

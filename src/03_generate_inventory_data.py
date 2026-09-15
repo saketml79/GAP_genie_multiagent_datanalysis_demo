@@ -1,21 +1,23 @@
 # Databricks notebook source
-# COMMAND ----------
 # MAGIC %md
 # MAGIC # Step 3: Generate Inventory Management Data
 # MAGIC Creates: warehouse_data, inventory_ledger, store_inventory, stock_movements
-# MAGIC 
+# MAGIC
 # MAGIC **Demo Story**: Western warehouses critically low on Apparel, 36+ SKU stockouts, outbound > inbound.
 
 # COMMAND ----------
+
 dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
 CATALOG = dbutils.widgets.get("catalog_name")
 SCHEMA = f"{CATALOG}.inventory_management"
 
 # COMMAND ----------
+
 import random
 from datetime import datetime, timedelta
 
-base_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+random.seed(43)  # Fixed seed for deterministic data generation
+base_date = datetime(2026, 9, 1)  # Fixed reference date — data is always identical
 regions = ['Western', 'Eastern', 'Central', 'Southern']
 product_families = ['Apparel', 'Accessories', 'Footwear', 'Home Goods', 'Electronics']
 product_categories = {
@@ -41,6 +43,7 @@ wh_regions = {
 }
 
 # COMMAND ----------
+
 # ---- Warehouses (12 DCs) ----
 warehouses = []
 for wh_id, region in wh_regions.items():
@@ -56,6 +59,7 @@ spark.createDataFrame(warehouses).write.mode("overwrite").option("overwriteSchem
 print(f"✓ warehouse_data: {len(warehouses)}")
 
 # COMMAND ----------
+
 # ---- Inventory Ledger (per warehouse per SKU) ----
 # STORY: Western + Apparel = critically low; Western has ~12% stockout rate
 inventory = []
@@ -86,6 +90,7 @@ spark.createDataFrame(inventory).write.mode("overwrite").option("overwriteSchema
 print(f"✓ inventory_ledger: {len(inventory)}")
 
 # COMMAND ----------
+
 # ---- Store Inventory (80 stores x ~40 SKUs) ----
 stores = [f'STORE-{i:03d}' for i in range(1, 81)]
 store_inv = []
@@ -108,6 +113,7 @@ spark.createDataFrame(store_inv).write.mode("overwrite").option("overwriteSchema
 print(f"✓ store_inventory: {len(store_inv)}")
 
 # COMMAND ----------
+
 # ---- Stock Movements (60 days) ----
 # STORY: Western has more outbound than inbound (depleting)
 movement_types = ['Inbound_Receipt', 'Outbound_Order', 'Transfer_In', 'Transfer_Out', 'Return_Receipt', 'Adjustment']

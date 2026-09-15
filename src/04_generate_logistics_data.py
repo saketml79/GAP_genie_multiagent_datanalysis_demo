@@ -1,23 +1,25 @@
 # Databricks notebook source
-# COMMAND ----------
 # MAGIC %md
 # MAGIC # Step 4: Generate Logistics Operations Data
 # MAGIC Creates: carriers, distribution_centers, shipments, transit_data
-# MAGIC 
+# MAGIC
 # MAGIC **Demo Story**: Western-bound shipments have 42%+ late rate, significant port congestion and carrier capacity issues.
-# MAGIC 
+# MAGIC
 # MAGIC **IMPORTANT**: shipments uses `destination_region` / `origin_region` (not `region`).
 
 # COMMAND ----------
+
 dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
 CATALOG = dbutils.widgets.get("catalog_name")
 SCHEMA = f"{CATALOG}.logistics_operations"
 
 # COMMAND ----------
+
 import random
 from datetime import datetime, timedelta
 
-base_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+random.seed(44)  # Fixed seed for deterministic data generation
+base_date = datetime(2026, 9, 1)  # Fixed reference date — data is always identical
 regions = ['Western', 'Eastern', 'Central', 'Southern']
 states_by_region = {
     'Western': ['CA','WA','OR','NV','AZ'], 'Eastern': ['NY','NJ','PA','MA','CT'],
@@ -39,6 +41,7 @@ spark.createDataFrame(carriers_data).write.mode("overwrite").option("overwriteSc
 print(f"✓ carriers: {len(carriers_data)}")
 
 # COMMAND ----------
+
 # ---- Distribution Centers (7) ----
 dc_data = [
     {'dc_id':'DC-W1','dc_name':'Los Angeles Hub','region':'Western','state':'CA','city':'Los Angeles','capacity_pallets':15000,'current_load_pct':92.3,'dock_doors':24,'is_cross_dock':True},
@@ -53,6 +56,7 @@ spark.createDataFrame(dc_data).write.mode("overwrite").option("overwriteSchema",
 print(f"✓ distribution_centers: {len(dc_data)}")
 
 # COMMAND ----------
+
 # ---- Shipments (90 days, ~12K) ----
 # NOTE: Uses destination_region and origin_region (NOT region)
 wh_to_region = {
@@ -107,6 +111,7 @@ spark.createDataFrame(shipments).write.mode("overwrite").option("overwriteSchema
 print(f"✓ shipments: {len(shipments)}")
 
 # COMMAND ----------
+
 # ---- Transit Data (tracking events) ----
 event_types = ['Picked_Up','In_Transit','At_Hub','Out_For_Delivery','Delivered','Exception','Returned']
 transit_events = []

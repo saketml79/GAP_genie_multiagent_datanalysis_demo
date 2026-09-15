@@ -1,53 +1,52 @@
 # Databricks notebook source
-# COMMAND ----------
 # MAGIC %md
 # MAGIC # Step 6: Create Reporting Views
 # MAGIC Creates 4 cross-domain views in the reporting schema: regional_performance_summary, revenue_trend, supply_chain_risk_scorecard, executive_kpis
 
 # COMMAND ----------
+
 dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
 CATALOG = dbutils.widgets.get("catalog_name")
 
 # COMMAND ----------
+
 # ---- View 1: Regional Performance Summary ----
 spark.sql(f"""
 CREATE OR REPLACE VIEW {CATALOG}.reporting.regional_performance_summary AS
-SELECT
-  so.region,
-  COUNT(DISTINCT so.order_id) AS total_orders,
-  ROUND(AVG(so.total_amount), 2) AS avg_order_value,
-  ROUND(SUM(so.total_amount), 2) AS total_revenue,
-  ROUND(
-    SUM(CASE WHEN so.order_status = 'Fulfilled' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1
-  ) AS fulfillment_rate,
-  (
-    SELECT COUNT(DISTINCT il.sku_id)
-    FROM {CATALOG}.inventory_management.inventory_ledger il
-    WHERE il.region = so.region AND il.stockout_flag = true
-  ) AS stockout_skus,
-  (
-    SELECT ROUND(AVG(CASE WHEN sh.is_late THEN 1.0 ELSE 0.0 END) * 100, 1)
-    FROM {CATALOG}.logistics_operations.shipments sh
-    WHERE sh.destination_region = so.region
-      AND sh.ship_date >= DATE_SUB(CURRENT_DATE(), 30)
-  ) AS late_shipment_pct,
-  (
-    SELECT ROUND(AVG(CASE WHEN spo.is_late THEN 1.0 ELSE 0.0 END) * 100, 1)
-    FROM {CATALOG}.supplier_procurement.supplier_orders spo
-    WHERE spo.order_date >= DATE_SUB(CURRENT_DATE(), 30)
-  ) AS supplier_late_pct,
-  (
-    SELECT ROUND(AVG(spo.lead_time_variance_days), 1)
-    FROM {CATALOG}.supplier_procurement.supplier_orders spo
-    WHERE spo.is_late = true AND spo.order_date >= DATE_SUB(CURRENT_DATE(), 30)
-  ) AS avg_supplier_delay_days
-FROM {CATALOG}.demand_analysis.sales_orders so
-WHERE so.order_date >= DATE_SUB(CURRENT_DATE(), 30)
-GROUP BY so.region
+WITH orders AS (
+  SELECT region,
+    COUNT(DISTINCT order_id) AS total_orders,
+    ROUND(AVG(total_amount), 2) AS avg_order_value,
+    ROUND(SUM(total_amount), 2) AS total_revenue,
+    ROUND(SUM(CASE WHEN order_status = 'Fulfilled' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS fulfillment_rate
+  FROM {CATALOG}.demand_analysis.sales_orders
+  WHERE order_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
+    AND order_date < DATE_TRUNC('month', DATE '2026-09-01')
+  GROUP BY region
+),
+inv AS (
+  SELECT region, COUNT(DISTINCT CASE WHEN stockout_flag = true THEN sku_id END) AS stockout_skus
+  FROM {CATALOG}.inventory_management.inventory_ledger GROUP BY region
+),
+ship AS (
+  SELECT destination_region AS region,
+    ROUND(AVG(CASE WHEN is_late THEN 1.0 ELSE 0.0 END) * 100, 1) AS late_shipment_pct
+  FROM {CATALOG}.logistics_operations.shipments
+  WHERE ship_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
+    AND ship_date < DATE_TRUNC('month', DATE '2026-09-01')
+  GROUP BY destination_region
+)
+SELECT o.region, o.total_orders, o.avg_order_value, o.total_revenue, o.fulfillment_rate,
+  COALESCE(i.stockout_skus, 0) AS stockout_skus,
+  COALESCE(s.late_shipment_pct, 0) AS late_shipment_pct
+FROM orders o
+LEFT JOIN inv i ON o.region = i.region
+LEFT JOIN ship s ON o.region = s.region
 """)
 print("✓ regional_performance_summary")
 
 # COMMAND ----------
+
 # ---- View 2: Revenue Trend ----
 spark.sql(f"""
 CREATE OR REPLACE VIEW {CATALOG}.reporting.revenue_trend AS
@@ -56,8 +55,10 @@ SELECT
   SUM(total_amount) AS daily_revenue,
   COUNT(DISTINCT order_id) AS order_count,
   CASE
-    WHEN DATEDIFF(CURRENT_DATE(), order_date) <= 30 THEN 'Last_30_Days'
-    WHEN DATEDIFF(CURRENT_DATE(), order_date) <= 60 THEN 'Prior_30_Days'
+    WHEN order_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
+         AND order_date < DATE_TRUNC('month', DATE '2026-09-01') THEN 'Last_Month'
+    WHEN order_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -2))
+         AND order_date < DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1)) THEN 'Prior_Month'
     ELSE 'Older'
   END AS period
 FROM {CATALOG}.demand_analysis.sales_orders
@@ -66,6 +67,7 @@ GROUP BY order_date, region, product_family
 print("✓ revenue_trend")
 
 # COMMAND ----------
+
 # ---- View 3: Supply Chain Risk Scorecard ----
 spark.sql(f"""
 CREATE OR REPLACE VIEW {CATALOG}.reporting.supply_chain_risk_scorecard AS
@@ -100,6 +102,7 @@ LEFT JOIN (
 print("✓ supply_chain_risk_scorecard")
 
 # COMMAND ----------
+
 # ---- View 4: Executive KPIs ----
 spark.sql(f"""
 CREATE OR REPLACE VIEW {CATALOG}.reporting.executive_kpis AS
@@ -107,13 +110,15 @@ SELECT
   (
     SELECT ROUND(SUM(total_amount), 0)
     FROM {CATALOG}.demand_analysis.sales_orders
-    WHERE order_date >= DATE_SUB(CURRENT_DATE(), 30)
-  ) AS revenue_last_30d,
+    WHERE order_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
+      AND order_date < DATE_TRUNC('month', DATE '2026-09-01')
+  ) AS revenue_last_month,
   (
     SELECT ROUND(SUM(total_amount), 0)
     FROM {CATALOG}.demand_analysis.sales_orders
-    WHERE order_date BETWEEN DATE_SUB(CURRENT_DATE(), 60) AND DATE_SUB(CURRENT_DATE(), 31)
-  ) AS revenue_prior_30d,
+    WHERE order_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -2))
+      AND order_date < DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
+  ) AS revenue_prior_month,
   (
     SELECT COUNT(DISTINCT sku_id)
     FROM {CATALOG}.inventory_management.inventory_ledger
@@ -126,18 +131,21 @@ SELECT
   (
     SELECT ROUND(AVG(CASE WHEN is_late THEN 1.0 ELSE 0.0 END) * 100, 1)
     FROM {CATALOG}.logistics_operations.shipments
-    WHERE ship_date >= DATE_SUB(CURRENT_DATE(), 30)
-  ) AS late_delivery_pct_30d,
+    WHERE ship_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
+      AND ship_date < DATE_TRUNC('month', DATE '2026-09-01')
+  ) AS late_delivery_pct_last_month,
   (
     SELECT ROUND(AVG(delay_days), 1)
     FROM {CATALOG}.logistics_operations.shipments
-    WHERE ship_date >= DATE_SUB(CURRENT_DATE(), 30) AND is_late = true
-  ) AS avg_delay_days_30d,
+    WHERE ship_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
+      AND ship_date < DATE_TRUNC('month', DATE '2026-09-01') AND is_late = true
+  ) AS avg_delay_days_last_month,
   (
     SELECT ROUND(AVG(CASE WHEN is_late THEN 1.0 ELSE 0.0 END) * 100, 1)
     FROM {CATALOG}.supplier_procurement.supplier_orders
-    WHERE order_date >= DATE_SUB(CURRENT_DATE(), 30)
-  ) AS supplier_late_pct_30d,
+    WHERE order_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
+      AND order_date < DATE_TRUNC('month', DATE '2026-09-01')
+  ) AS supplier_late_pct_last_month,
   (
     SELECT COUNT(*)
     FROM {CATALOG}.supplier_procurement.vendor_slas
@@ -148,7 +156,8 @@ SELECT
       SUM(CASE WHEN order_status = 'Fulfilled' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1
     )
     FROM {CATALOG}.demand_analysis.sales_orders
-    WHERE order_date >= DATE_SUB(CURRENT_DATE(), 30)
+    WHERE order_date >= DATE_TRUNC('month', ADD_MONTHS(DATE '2026-09-01', -1))
+      AND order_date < DATE_TRUNC('month', DATE '2026-09-01')
   ) AS service_level_pct
 """)
 print("✓ executive_kpis")

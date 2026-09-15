@@ -1,23 +1,25 @@
 # Databricks notebook source
-# COMMAND ----------
 # MAGIC %md
 # MAGIC # Step 2: Generate Demand Analysis Data
 # MAGIC Creates: products, customer_segments, sales_orders, demand_forecasts, pos_data, promotions
-# MAGIC 
+# MAGIC
 # MAGIC **Demo Story**: Western Region revenue drops ~30% in last 30 days, Apparel family hit hardest.
 
 # COMMAND ----------
+
 dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
 CATALOG = dbutils.widgets.get("catalog_name")
 SCHEMA = f"{CATALOG}.demand_analysis"
 print(f"Target: {SCHEMA}")
 
 # COMMAND ----------
+
 from pyspark.sql.types import *
 import random
 from datetime import datetime, timedelta
 
-base_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+random.seed(42)  # Fixed seed for deterministic data generation
+base_date = datetime(2026, 9, 1)  # Fixed reference date — data is always identical
 
 regions = ['Western', 'Eastern', 'Central', 'Southern']
 states_by_region = {
@@ -55,6 +57,7 @@ df_products.write.mode("overwrite").option("overwriteSchema", "true").saveAsTabl
 print(f"✓ products: {df_products.count()}")
 
 # COMMAND ----------
+
 # ---- Customer Segments (500 customers) ----
 segment_types = ['Premium', 'Standard', 'Value', 'Wholesale']
 customer_segments = []
@@ -76,6 +79,7 @@ df_customers.write.mode("overwrite").option("overwriteSchema", "true").saveAsTab
 print(f"✓ customer_segments: {df_customers.count()}")
 
 # COMMAND ----------
+
 # ---- Sales Orders (90 days, ~20K orders) ----
 # STORY: Western region + Apparel drops 30% in last 30 days
 sales_orders = []
@@ -113,6 +117,7 @@ df_sales.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f
 print(f"✓ sales_orders: {df_sales.count()}")
 
 # COMMAND ----------
+
 # ---- Demand Forecasts (6 months) ----
 # STORY: Western forecast missed badly (over-forecast by 35%)
 forecasts = []
@@ -143,6 +148,7 @@ df_forecasts.write.mode("overwrite").option("overwriteSchema", "true").saveAsTab
 print(f"✓ demand_forecasts: {df_forecasts.count()}")
 
 # COMMAND ----------
+
 # ---- POS Data (60 days, ~50K transactions) ----
 stores = [f'STORE-{i:03d}' for i in range(1, 81)]
 store_regions = {s: random.choice(regions) for s in stores}
@@ -170,6 +176,7 @@ df_pos.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{
 print(f"✓ pos_data: {df_pos.count()}")
 
 # COMMAND ----------
+
 # ---- Promotions (30 campaigns) ----
 promo_types = ['Clearance', 'Seasonal_Sale', 'Flash_Sale', 'Loyalty_Discount', 'Bundle_Deal']
 promotions = []

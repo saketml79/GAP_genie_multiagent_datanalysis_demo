@@ -1,21 +1,23 @@
 # Databricks notebook source
-# COMMAND ----------
 # MAGIC %md
 # MAGIC # Step 5: Generate Supplier Procurement Data
 # MAGIC Creates: suppliers, supplier_orders, supplier_lead_times, vendor_slas, procurement_data
-# MAGIC 
+# MAGIC
 # MAGIC **Demo Story**: Asian suppliers with +5-18 day delays; SUP-001 TextilePro Asia worst (+10-20 days, factory shutdowns).
 
 # COMMAND ----------
+
 dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
 CATALOG = dbutils.widgets.get("catalog_name")
 SCHEMA = f"{CATALOG}.supplier_procurement"
 
 # COMMAND ----------
+
 import random
 from datetime import datetime, timedelta
 
-base_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+random.seed(45)  # Fixed seed for deterministic data generation
+base_date = datetime(2026, 9, 1)  # Fixed reference date — data is always identical
 product_families = ['Apparel', 'Accessories', 'Footwear', 'Home Goods', 'Electronics']
 
 # ---- Suppliers (12) ----
@@ -37,6 +39,7 @@ spark.createDataFrame(suppliers_data).write.mode("overwrite").option("overwriteS
 print(f"✓ suppliers: {len(suppliers_data)}")
 
 # COMMAND ----------
+
 # ---- Supplier Orders (120 days, ~1400 POs) ----
 # STORY: Asian suppliers +5-18 day delays last 45 days; SUP-001 +10-20 days last 60 days
 supplier_orders = []
@@ -84,6 +87,7 @@ spark.createDataFrame(supplier_orders).write.mode("overwrite").option("overwrite
 print(f"✓ supplier_orders: {len(supplier_orders)}")
 
 # COMMAND ----------
+
 # ---- Supplier Lead Times (12 months x 12 suppliers) ----
 lead_times = []
 for month_offset in range(12):
@@ -114,6 +118,7 @@ spark.createDataFrame(lead_times).write.mode("overwrite").option("overwriteSchem
 print(f"✓ supplier_lead_times: {len(lead_times)}")
 
 # COMMAND ----------
+
 # ---- Vendor SLAs (5 metrics x 12 suppliers) ----
 sla_metrics = ['On_Time_Delivery', 'Quality_Acceptance', 'Fill_Rate', 'Response_Time', 'Documentation_Accuracy']
 vendor_slas = []
@@ -142,6 +147,7 @@ spark.createDataFrame(vendor_slas).write.mode("overwrite").option("overwriteSche
 print(f"✓ vendor_slas: {len(vendor_slas)}")
 
 # COMMAND ----------
+
 # ---- Procurement Data (12 months x 5 families) ----
 procurement = []
 for month_offset in range(12):
