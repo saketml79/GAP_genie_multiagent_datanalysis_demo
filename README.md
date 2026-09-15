@@ -7,8 +7,8 @@ Enterprise data warehouses and data marts contain the answers to complex busines
 Using a realistic supply chain scenario with 23 tables across 5 business domains, this workshop:
 
 - Builds a **Supervisor Agent** that orchestrates 5 domain-specific **Genie Agents** to answer complex cross-domain business questions
-- Starts at **30% accuracy** with a minimal baseline and progressively improves to **100% accuracy** across 6 iterations
-- Demonstrates **why each improvement matters**: certified queries, column synonyms, agent instructions, supervisor hardening, metric views, and business definitions
+- Starts at **low accuracy** with a minimal baseline and progressively improves to **100% accuracy** across 5 iterations
+- Demonstrates **why each improvement matters**: column comments, column synonyms, certified queries + supervisor hardening, metric views, and UC Pages + Domains
 - Shows that the last mile of accuracy requires **data governance** (formal business definitions, Unity Catalog tags, metric views) — not just better prompts
 
 ### What Are Genie Agents and Supervisor Agents?
@@ -29,7 +29,7 @@ Using a realistic supply chain scenario with 23 tables across 5 business domains
 4. A data team member reviews the feedback, identifies the root cause (wrong column, wrong filter, ambiguous metric), and applies a fix — exactly the same kinds of fixes shown in this demo (certified queries, synonyms, instructions, metric views)
 5. Over time, the agent gets better and better at answering questions correctly
 
-> **This demo compresses months of user-feedback-driven improvement into 6 scripted iterations**, so you can see the full journey in a single workshop session. Every fix we apply (certified queries, synonyms, metric views, business definitions) is the same fix a data team would apply in response to real user feedback.
+> **This demo compresses months of user-feedback-driven improvement into 5 scripted iterations**, so you can see the full journey in a single workshop session. Every fix we apply (comments, synonyms, certified queries, metric views, UC Pages) is the same fix a data team would apply in response to real user feedback.
 
 ---
 
@@ -39,7 +39,7 @@ A **multi-regional retail company** sells 100 SKUs across 5 product families (Ap
 
 The company's data warehouse is organized in [Unity Catalog](https://docs.databricks.com/en/data-governance/unity-catalog/index.html) with 5 domain schemas — each owned by a different business team — plus a shared `reporting` schema for cross-domain executive views.
 
-### Data Model (Final State — after all 6 iterations)
+### Data Model (Final State — after all 5 iterations)
 
 The demo generates 23 base tables (~130K total rows) and progressively adds 5 metric views + 1 cross-domain view through the improvement iterations.
 
@@ -73,7 +73,7 @@ graph TD
     style SP_V fill:#e1f5fe,stroke:#0288d1
 ```
 
-**Metric views** (blue) are pre-computed summaries added in iterations 5–6. They encode the exact business definition in the column name (e.g., `sku_warehouse_positions_below_safety_stock` instead of an ambiguous `COUNT(*)`) — this is what eliminates the last sources of agent error.
+**Metric views** (blue) are pre-computed summaries added in Iteration 4. They encode the exact business definition in the column name (e.g., `sku_warehouse_positions_below_safety_stock` instead of an ambiguous `COUNT(*)`) — this is what eliminates the last sources of agent error.
 
 | Schema | Key Tables (bold = primary fact table) | Rows | Business Domain |
 |--------|---------------------------------------|------|----------------|
@@ -87,25 +87,13 @@ All data is generated with a **fixed reference date** of September 1, 2026 (`bas
 
 ---
 
-## The Two Test Prompts
+## The Test Prompt
 
-### Prompt 1 — The Main Business Question (used for iterations 1–5)
+A single comprehensive prompt covers all 10 ground truth metrics across all 5 domains — including Cost of Disruption and Q3 targets:
 
-> **"Why did revenue drop in the Western Region last month, are we going to miss our quarterly service-level targets, and what immediate actions should we take?"**
+> **"We need a complete supply chain health check for our West region in August 2026. The CFO wants to understand what drove the revenue decline versus July, which product families are most at fault, and whether our on-time delivery rate and average delay for West region shipments are contributing to the problem. I also need our current fill rate, how many inventory positions are sitting below safety stock in the West region, and how many SKUs are completely stocked out. On the vendor side: what percentage of vendors delivered late in August, and what are the total vendor SLA penalties we have incurred? Bring it all together as our total Cost of Disruption by region for August 2026 — cancelled revenue, at-risk backorder revenue, wasted freight on late shipments, and supplier penalty exposure in one number per region. Are we going to miss our Q3 service-level targets, and what are the top actions we should take?"**
 
-This question requires investigation across all 5 domains (demand, inventory, logistics, suppliers, executive KPIs). The Supervisor must call multiple Genie Agents, reconcile their findings, and produce a structured executive brief. After 5 iterations, the system achieves 100% accuracy on 10 ground truth KPIs.
-
-### Prompt 2 — The Follow-Up That Breaks the System (used for iteration 6)
-
-> **"What is our total Cost of Disruption by region last month — combining lost revenue from cancellations, at-risk backorder revenue, supplier SLA penalties, and wasted logistics spend on late shipments?"**
-
-After reaching 100%, this new question **cannot be answered** because:
-- "Cost of Disruption" is undefined in any schema, comment, synonym, or certified query
-- It requires joining 3 schemas (`demand_analysis` + `logistics_operations` + `supplier_procurement`)
-- No single Genie Agent has visibility across all three domains
-- The Supervisor collects text answers — it cannot JOIN or SUM across agents
-
-**Iteration 6** fixes this by creating a formal business definition (UC comments + tags), a cross-domain metric view, and a certified query — demonstrating that **data governance is the answer, not better prompts**.
+This prompt deliberately uses **business vocabulary** that does NOT match the database column names — "revenue" (not `total_amount`), "fill rate" (not `service_level_pct`), "vendor" (not `supplier`), "Cost of Disruption" (not in any table). Each iteration adds one UC Semantics feature to close the gap between business language and database reality.
 
 ## Architecture
 
@@ -115,8 +103,10 @@ Supervisor Agent ("Supply Chain Control Tower")
     ├─ Inventory Management Agent   → Genie Agent (4 tables + 1 metric view)
     ├─ Logistics Operations Agent   → Genie Agent (4 tables + 1 metric view)
     ├─ Supplier Risk Agent          → Genie Agent (5 tables + 1 metric view)
-    ├─ Executive Reporting Agent    → Genie Agent (4 views + 1 metric view)
-    └─ Evaluator Agent              → Genie Agent (1 table: ground_truth_kpis)
+    └─ Executive Reporting Agent    → Genie Agent (4 views + 1 metric view)
+
+Evaluator Agent (external, NOT a supervisor tool)
+    └─ Genie Agent (1 table: ground_truth_kpis) — called by Python scorer only
 ```
 
 ### How the Supervisor Orchestrates a Query
@@ -132,9 +122,7 @@ sequenceDiagram
     participant LO as Logistics Ops
     participant SR as Supplier Risk
     participant ER as Executive Reporting
-    participant EV as Evaluator
-
-    User->>S: "Why did revenue drop in Western Region<br/>last month, are we going to miss our<br/>quarterly service-level targets, and<br/>what immediate actions should we take?"
+    User->>S: "Complete supply chain health check<br/>for West region in August 2026:<br/>revenue decline, OTD, fill rate,<br/>stockouts, vendor penalties, CoD,<br/>Q3 targets, and actions"
 
     Note over S: Decomposes question into<br/>domain-specific sub-queries
 
@@ -155,10 +143,7 @@ sequenceDiagram
 
     Note over S: Cross-domain reconciliation:<br/>Supplier delays → Inventory gaps →<br/>Logistics failures → Revenue loss
 
-    S->>EV: Compare all findings<br/>against ground truth KPIs
-    EV-->>S: 10/10 EXACT match ✅
-
-    S-->>User: 7-Section Executive Brief<br/>Root Cause Chain · Scorecard · Action Plan
+    S-->>User: 6-Section Executive Brief<br/>Root Cause Chain · Reconciliation · Action Plan
 ```
 
 ## The Demo Story
@@ -179,7 +164,7 @@ The Supervisor Agent investigates all 5 domains and produces a structured execut
 
 ### Option A: One-Click Pipeline (recommended)
 
-Run the master orchestrator notebook. It handles everything: teardown, data generation, agent creation, all 6 iterations, and verification.
+Run the master orchestrator notebook. It handles everything: teardown, data generation, agent creation, all iterations, and verification.
 
 | Notebook | Description |
 |----------|-------------|
@@ -222,7 +207,7 @@ Open each notebook in the Databricks UI and **Run All**, in order:
 
 | # | Script | What It Does |
 |---|--------|-------------|
-| 8 | `src/08_setup_genie_supervisor.py` | Creates 5 domain Genie Agents + 1 Evaluator Agent + ground truth table + Supervisor Agent with 6 tools |
+| 8 | `src/08_setup_genie_supervisor.py` | Creates 5 domain Genie Agents + Evaluator (external scorer) + ground truth table + Supervisor Agent with 5 domain tools |
 
 Set the `warehouse_id` widget to your SQL Warehouse ID before running.
 
@@ -231,100 +216,79 @@ This creates a **deliberately minimal** baseline:
 - Supervisor has basic instructions — no structured format, no specific question phrasings
 - Expected accuracy: **~30%** (3 of 10 ground truth metrics match)
 
-**Test it now** — go to the [Agents playground](https://docs.databricks.com/en/large-language-models/llm-serving-intro.html) and send **Prompt 1** (the main business question from above). The Supervisor will try but produce inconsistent, partially incorrect results.
+**Test it now** — go to the Agents playground and send the test prompt. The Supervisor will try but produce inconsistent, partially incorrect results.
 
-#### Step 3: Baseline Assessment (optional)
+#### Step 3: Progressive Improvement (the core demo)
 
-| # | Script | What It Does |
-|---|--------|-------------|
-| - | `src/improvements/iteration_01_baseline_assessment.py` | Runs ground truth SQL, documents correct values, shows what the baseline gets wrong |
+Run each iteration **in order**. After each one, invoke the Supervisor with the same prompt to see improvement.
 
-This is read-only — it doesn't change any agents. It establishes the scoreboard.
-
-#### Step 4: Progressive Improvement (the core demo)
-
-Run each iteration notebook **in order**. After each one, invoke the Supervisor with **Prompt 1** to see the improvement.
-
-##### Iteration 2: Certified Queries → ~20% accuracy (WORSE)
+##### Iteration 1: Column/Table Comments
 
 | # | Script | What It Does |
 |---|--------|-------------|
-| - | `src/improvements/iteration_02_certified_queries.py` | Adds 20 certified SQL queries across 5 domain Genie Agents |
+| 7 | `src/07_add_all_comments.py` | Adds 180+ column and table comments explaining data semantics |
 
-**What changed**: Each Genie Agent now has pre-built SQL patterns with correct columns and calendar-month time windows.
+**UC Feature**: `ALTER TABLE/COLUMN SET COMMENT`
 
-**Why it got WORSE**: Certified queries only fire when the question matches the pattern. The Supervisor still asks vague questions like "Tell me about Western revenue" which don't trigger the certified SQL. The certified patterns may even confuse Genie when non-matching questions arrive.
+**What it fixes**: Agents learn that `below_safety_stock_flag` counts are per SKU-warehouse position (not per unique SKU), and that `stockout_flag` requires `COUNT(DISTINCT sku_id)`. Fixes metrics **#4** and **#5**.
 
-**Key insight**: Optimizing sub-agents without optimizing the orchestrator is counterproductive.
-
-##### Iteration 3: Enhanced Instructions + Synonyms → ~50% accuracy
+##### Iteration 2: Column Synonyms
 
 | # | Script | What It Does |
 |---|--------|-------------|
-| - | `src/improvements/iteration_03_column_synonyms.py` | Adds enhanced domain instructions + 107 column synonyms to all 5 Genie Agents |
+| - | `src/improvements/iteration_03_column_synonyms.py` | Adds 107 column synonyms + enhanced domain instructions to all 5 Genie Agents |
 
-**What changed**:
-- Enhanced instructions tell each agent: "last month = calendar month boundaries (DATE_TRUNC)"
-- Schema notes: "shipments has destination_region, NOT region"
-- 107 column synonyms: "revenue" → total_amount, "late" → is_late, etc.
-- Logistics synonyms: "region" → destination_region
+**UC Feature**: Genie `column_configs.synonyms` API
 
-**Why it jumped to 50%**: Agents now understand time periods and correct columns. But the Supervisor still phrases some questions poorly.
+**What it fixes**: Maps business vocabulary to technical column names — "revenue" → `total_amount`, "fill rate" → `service_level_pct`, "vendor" → `supplier_*` tables, "SLA penalty" → `penalty_amount`, "region" → `destination_region`. Fixes metrics **#1**, **#3**, **#6**, **#7**.
 
-##### Iteration 4: Supervisor Hardening → ~90% accuracy (9/10)
+##### Iteration 3: Certified Queries + Supervisor Hardening
 
 | # | Script | What It Does |
 |---|--------|-------------|
-| - | `src/improvements/iteration_04_supervisor_hardening.py` | Updates Supervisor instructions (7-section mandatory format) + tool descriptions with exact question phrasings |
+| - | `src/improvements/iteration_02_certified_queries.py` | Adds 20 certified SQL query templates across 5 domain Genie Agents |
+| - | `src/improvements/iteration_04_supervisor_hardening.py` | Updates Supervisor instructions (6-section format) + tool descriptions with exact question phrasings |
 
-**What changed**:
-- Mandatory 7-section output format (Findings, Reconciliation, Root Cause Chain, Scorecard, Actions)
-- Tool descriptions now mandate EXACT questions: e.g., "Show revenue by region comparing last month to prior month"
-- Evaluator agent called LAST to validate all findings against ground truth
-- Structured action tables with owners, targets, and timelines
+**UC Feature**: `example_question_sqls` + Supervisor `instructions`
 
-**Why 90% (not 100%)**: The Supervisor asks the right questions and 9 of 10 metrics match exactly. However, "Western below safety stock" still misses: the Genie Agent returns 61 (COUNT DISTINCT sku_id) while ground truth is 109 (COUNT of all SKU-warehouse positions). This is a **metric definition ambiguity** that certified queries and synonyms alone cannot resolve.
+**What it fixes**: SQL templates encode the correct MoM formula and OTD computation. Supervisor hardening ensures precise question routing. Fixes metrics **#1** (MoM formula) and **#2** (OTD calc).
 
-##### Iteration 5: Metric Views + Business Glossary → 100% accuracy
+**Key insight**: Certified queries + orchestrator routing work together — neither alone is sufficient.
 
-| # | Script | What It Does |
-|---|--------|-------------|
-| - | `src/improvements/iteration_05_metric_views_glossary.py` | Creates 4 metric views, adds them to Genie Agents with certified queries, UC tags, and column-level examples |
-
-**What changed**:
-- 4 **metric views** with unambiguous column names (e.g., `sku_warehouse_positions_below_safety_stock` = 109)
-- **Column comments with format examples** (e.g., "Example value: 109")
-- **Table comments with business definitions** ("Use sku_warehouse_positions, not unique_skus")
-- **UC Tags** for governance (`domain=inventory`, `metric_type=safety_stock`, `data_quality=authoritative`)
-- Certified queries that reference metric views instead of base tables
-- Updated inventory agent instructions to prefer the metric view
-- Updated supervisor tool description to ask about "SKU-warehouse positions"
-
-**Why 100%**: The metric view eliminates the ambiguity entirely. The column name IS the metric definition — there's no way for the agent to misinterpret `sku_warehouse_positions_below_safety_stock`.
-
-**Key insight**: When a metric has multiple valid interpretations (COUNT vs COUNT DISTINCT), the only reliable fix is a **pre-computed metric view** that encodes the exact business definition in the column name itself.
-
-##### Iteration 6: Cost of Disruption → 100% accuracy (11/11)
+##### Iteration 4: Metric Views + Cost of Disruption + Certification + Tags
 
 | # | Script | What It Does |
 |---|--------|-------------|
-| - | `src/improvements/iteration_06_cost_of_disruption.py` | Creates cross-domain CoD view + UC tags + rich business definitions + certified query + 11th ground truth |
+| - | `src/improvements/iteration_05_metric_views_glossary.py` | Creates 4 UC Metric Views (`WITH METRICS LANGUAGE YAML`), UC tags, certification |
+| - | `src/improvements/iteration_06_cost_of_disruption.py` | Creates cross-domain `cost_of_disruption_by_region` view + certified query |
 
-**Now test Prompt 2** (the Cost of Disruption follow-up question from above). Before iteration 6, the system fails completely. After iteration 6, it returns the correct cross-domain metric.
+**UC Features**: `CREATE VIEW WITH METRICS LANGUAGE YAML`, governed tags, certification
 
-**Key insight**: Even a 100%-accurate system breaks when asked a question involving an undefined business concept. The fix is governance — formal business definitions, cross-domain metric views, and UC documentation — not better SQL or smarter instructions.
+**What it fixes**: Pre-computed metric views with unambiguous column names and `MEASURE()` syntax. Cross-domain CoD view. Fixes metrics **#2** (OTD via view), **#4** (authoritative count), **#9** (CoD).
 
-#### Step 5: Run the Visual Demo
+**Key insight**: When a metric has multiple valid interpretations, the only reliable fix is a **pre-computed metric view** that encodes the definition in the column name itself.
+
+##### Iteration 5: UC Pages + Domains (manual — from UI)
+
+This iteration is done by the user from the Databricks UI, not via notebook. See the **UC Pages** section below.
+
+**UC Features**: UC Pages (governed business definitions), Domains (business-aligned grouping)
+
+**What it fixes**: The prompt asks "Are we going to miss our Q3 service-level targets?" — the target (95%) is a business policy, not data. A UC Page defines it authoritatively. Fixes metric **#10**.
+
+**Key insight**: The last mile of accuracy requires business governance — policies and definitions that exist nowhere in the data.
+
+#### Step 4: Run the Visual Demo
 
 | # | Script | What It Does |
 |---|--------|-------------|
 | - | `src/10_demo_runner.py` | Generates plotly charts from live data + invokes the Supervisor + scores against ground truth |
 
-Or invoke the Supervisor directly from the [Agents playground](https://docs.databricks.com/en/large-language-models/llm-serving-intro.html) with **Prompt 1** or **Prompt 2** from above.
+Or invoke the Supervisor directly from the [Agents playground](https://docs.databricks.com/en/large-language-models/llm-serving-intro.html) with the test prompt.
 
 > **Note on visualizations**: Genie Agents produce interactive charts when used standalone in the Genie UI. When called as tools by a Supervisor Agent via API, they return structured data tables. The `10_demo_runner.py` generates plotly charts from the same underlying data to provide the visual layer.
 
-#### Step 6: Teardown (when done)
+#### Step 5: Teardown (when done)
 
 | # | Script | What It Does |
 |---|--------|-------------|
@@ -345,15 +309,14 @@ Or invoke the Supervisor directly from the [Agents playground](https://docs.data
 
 ## Expected Output (after iteration 5)
 
-The Supervisor produces a structured 7-section executive brief:
+The Supervisor produces a structured 6-section executive brief:
 
 1. **What I Understood** — restates the business question
 2. **Investigation Plan** — lists which agents to query and exact questions
 3. **Findings by Agent** — for each of 5 agents: questions asked, SQL used, result summary, confidence
 4. **Cross-Domain Reconciliation** — table comparing metrics across agents + ground truth
 5. **Root Cause Chain** — numbered causal cascade: Supplier → Inventory → Logistics → Revenue → Service Level
-6. **Ground Truth Comparison Scorecard** — 10-row table: Agent Finding vs Ground Truth vs Match
-7. **Conclusion and Actions** — direct answer + immediate actions (table) + medium-term actions (table) + KPIs to monitor + risk assessment
+6. **Conclusion and Actions** — direct answer + immediate actions (table) + medium-term actions (table) + KPIs to monitor + risk assessment
 
 ## Complete Metric & UC Feature Matrix
 
@@ -665,14 +628,14 @@ The master orchestrator runs 5 stages, each adding ONE category of UC feature:
     ├── 05_generate_supplier_data.py              # 5 supplier tables (~1.7K rows)
     ├── 06_create_reporting_views.py              # 4 cross-domain views
     ├── 07_add_all_comments.py                   # 180+ column comments
-    ├── 08_setup_genie_supervisor.py              # Raw baseline: 6 Genie Agents + Supervisor
+    ├── 08_setup_genie_supervisor.py              # Raw baseline: 5 domain Genie Agents + Evaluator + Supervisor
     ├── 09_teardown.py                            # Full cleanup
     ├── 10_demo_runner.py                         # Charts + supervisor invocation + scoring
     ├── improvements/
     │   ├── iteration_01_baseline_assessment.py    # Ground truth + error documentation
     │   ├── iteration_02_certified_queries.py      # 20 certified SQL patterns
     │   ├── iteration_03_column_synonyms.py        # 107 synonyms + enhanced instructions
-    │   ├── iteration_04_supervisor_hardening.py   # 7-section format + exact phrasings
+    │   ├── iteration_04_supervisor_hardening.py   # 6-section format + exact phrasings
     │   ├── iteration_05_metric_views_glossary.py  # Metric views + UC tags + examples
     │   └── iteration_06_cost_of_disruption.py     # Cross-domain CoD view + UC governance
     └── notebooks/

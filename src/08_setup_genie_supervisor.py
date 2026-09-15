@@ -3,7 +3,7 @@
 # MAGIC # Step 8: Create Genie Spaces, Evaluator, and Supervisor Agent
 # MAGIC Creates 5 domain Genie Spaces with **minimal baseline** instructions (no certified queries,
 # MAGIC no column synonyms, no hardened prompts). Also creates the Evaluator Space with ground truth
-# MAGIC KPIs, and a Supervisor Agent that orchestrates all 6 as sub-agents.
+# MAGIC KPIs (for **external** scoring only — NOT a supervisor tool), and a Supervisor Agent that orchestrates the 5 domain agents.
 # MAGIC
 # MAGIC **This is the V1 (raw baseline) that the improvement iterations will progressively enhance.**
 # MAGIC
@@ -189,7 +189,7 @@ print(f"\n✓ All Genie Spaces created: {json.dumps(space_ids, indent=2)}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Create Evaluator Space + Ground Truth Table
+# DBTITLE 1,Create Evaluator Space + Ground Truth Table (external scoring only)
 # ====================================================================
 # CREATE EVALUATOR SPACE + GROUND TRUTH TABLE
 # ====================================================================
@@ -212,7 +212,7 @@ CREATE TABLE {CATALOG}.reporting.ground_truth_kpis (
 ) USING DELTA
 """)
 spark.sql(f"""
-INSERT INTO {CATALOG}.reporting.ground_truth_kpis VALUES
+INSERT INTO {CATALOG}.reporting.ground_truth_kpis (agent, metric, ground_truth_value, uc_feature_needed, calculated_at) VALUES
   ('demand-analysis', 'Western revenue MoM change (Aug vs Jul 2026)',
    CAST((
      SELECT ROUND(
@@ -378,7 +378,7 @@ else:
 
 # COMMAND ----------
 
-# DBTITLE 1,Create Supervisor Agent (evaluator compares, not retrieves)
+# DBTITLE 1,Create Supervisor Agent (no evaluator tool)
 # ====================================================================
 # CREATE SUPERVISOR AGENT -- RAW BASELINE (minimal instructions)
 # ====================================================================
@@ -393,13 +393,12 @@ Available agents:
 - logistics-operations: Shipment and delivery data
 - supplier-risk: Supplier performance data
 - executive-reporting: KPI summaries and dashboards
-- evaluator: Ground truth validation data
 
 When answering questions:
 1. Determine which agents to query
 2. Ask each agent relevant questions
 3. Synthesize findings into a comprehensive answer
-4. After collecting all findings, summarize the key metrics and values you found, then ask the evaluator to compare them against the ground truth KPIs. Do NOT ask the evaluator for the ground truth values — only ask it to validate YOUR findings."""
+4. Include the SQL each agent used so the user can verify"""
 }
 
 create_resp = requests.post(
@@ -419,7 +418,7 @@ else:
 
 # COMMAND ----------
 
-# DBTITLE 1,Add Sub-Agent Tools (evaluator = comparison, not retrieval)
+# DBTITLE 1,Add Sub-Agent Tools (5 domain agents, no evaluator)
 # ====================================================================
 # ADD SUB-AGENT TOOLS
 # ====================================================================
@@ -444,10 +443,9 @@ tool_configs = {
         "description": "Executive Reporting agent. Answers questions about KPIs, regional performance, and dashboards.",
         "space_key": "SC - Executive Reporting"
     },
-    "evaluator": {
-        "description": "Evaluator agent. Compares YOUR findings against the secret ground truth KPIs. After ALL other agents have answered, summarize the key numeric values you discovered and ask this agent to compare them against ground truth. Do NOT ask for raw ground truth values.",
-        "space_key": "SC - Evaluator"
-    },
+    # NOTE: Evaluator is NOT added as a supervisor tool.
+    # It is called externally by the Python scorer in 00_run_all.py.
+    # This prevents the supervisor from accessing ground truth values.
 }
 
 for tool_id, config in tool_configs.items():
