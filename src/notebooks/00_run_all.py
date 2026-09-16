@@ -1194,7 +1194,7 @@ def test_failing_metrics(label=""):
     return passed, failed, errs
 
 # --- Comprehensive Prompt Benchmark: Baseline ---
-comp_baseline = run_comprehensive_benchmark("Baseline (before any UC features)")
+comp_baseline = run_comprehensive_benchmark("Baseline (before any UC semantic layer features enhancement)")
 
 # COMMAND ----------
 
