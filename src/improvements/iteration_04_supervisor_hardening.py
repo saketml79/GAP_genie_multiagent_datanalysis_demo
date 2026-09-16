@@ -139,7 +139,9 @@ Use: ✅ EXACT (<1%), ⚠️ CLOSE (<5%), ❌ MISS (>5%). ALWAYS include actual 
 9. Product family subtotals must sum to regional total
 10. Call evaluator LAST: 'Show all ground truth values'
 11. Build Scorecard in Section 6
-12. In ALL tables and findings, label time periods with actual month names (e.g. 'Aug 2026') not just 'last month'"""
+12. In ALL tables and findings, label time periods with actual month names (e.g. 'Aug 2026') not just 'last month'
+13. For EVERY metric the prompt asks about, report a numeric answer OR explicitly state 'NOT_FOUND: [metric name] could not be determined from available data' -- never silently omit a requested metric
+14. In Section 3, each agent MUST list metrics it could NOT answer under a 'Gaps' bullet -- e.g. 'Gaps: lead time variance not available in this agent's tables'"""
 
 resp = requests.patch(
     f"{host}/api/2.1/{supervisor_name}?update_mask=instructions",
@@ -168,11 +170,11 @@ print(f"{status} Supervisor instructions updated ({len(new_instructions)} chars)
 
 # DBTITLE 1,Update Supervisor Tool Descriptions (Hardened)
 tool_updates = {
-    "demand-analysis": "Demand Analysis specialist. Ask EXACTLY: 'Show revenue by region comparing last month to prior month' and 'Show Western region revenue by product family last month vs prior month'",
-    "inventory-management": "Inventory Management specialist. Ask EXACTLY: 'Show stockout SKUs, below safety stock count, and days of supply by region'",
-    "logistics-operations": "Logistics Operations specialist. CRITICAL: use 'destination_region' not 'region'. Ask EXACTLY: 'What is the late delivery rate and average delay days by destination region last month?'",
-    "supplier-risk": "Supplier Risk specialist. Ask by continent not region. Ask EXACTLY: 'What is the supplier late rate by continent last month?'",
-    "executive-reporting": "Executive Reporting specialist. Ask EXACTLY: 'Show executive KPIs including service level performance'",
+    "demand-analysis": "Demand Analysis specialist. Ask EXACTLY: 'Show revenue by region comparing last month to prior month -- August and July revenue, dollar change, and percentage change. Also show Western region revenue by product family last month vs prior month.' Report NOT_FOUND for any metric you cannot answer.",
+    "inventory-management": "Inventory Management specialist. Ask EXACTLY: 'Show positions below safety stock, unique SKUs below safety stock, days of supply for at-risk items, stockout SKUs, and warehouses affected by region.' Report NOT_FOUND for any metric you cannot answer.",
+    "logistics-operations": "Logistics Operations specialist. CRITICAL: use 'destination_region' not 'region'. Ask EXACTLY: 'What is the on-time delivery rate, late delivery rate, average delay days, total shipments, late shipments, and wasted freight cost by destination region last month?' Report NOT_FOUND for any metric you cannot answer.",
+    "supplier-risk": "Supplier Risk specialist. Ask by continent not region. Ask EXACTLY: 'What is the supplier late rate, total purchase orders, late purchase orders, and average lead time variance by continent last month? Also show total SLA penalties.' Report NOT_FOUND for any metric you cannot answer.",
+    "executive-reporting": "Executive Reporting specialist. Ask EXACTLY: 'Show executive KPIs including service level performance and Cost of Disruption by region.' Report NOT_FOUND for any metric you cannot answer.",
     "evaluator": "Evaluator with ground truth. Call LAST after all other agents. Ask EXACTLY: 'Show all ground truth values'",
 }
 

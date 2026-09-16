@@ -3,16 +3,15 @@
 # [tool.databricks.environment]
 # environment_version = "5"
 # ///
+# DBTITLE 1,Title and Prompt
 # MAGIC %md
 # MAGIC # Expected Output Reference: Supply Chain Control Tower
 # MAGIC
-# MAGIC **Prompt/Business Question**: "Why did revenue drop in the Western Region last month, are we going to miss our quarterly
-# MAGIC service-level targets, and what immediate actions should we take? Investigate every dimension -- demand,
-# MAGIC inventory, logistics, suppliers, and overall KPIs. Show me your full reasoning, which agents you consulted,
-# MAGIC what each found, and how the root causes connect across domains."
+# MAGIC **Canonical Prompt**: "We need a complete supply chain health check for our West region in August 2026. The CFO wants to understand what drove the revenue decline versus July — show the actual August and July revenue numbers, the dollar change, and the percentage change — and which product families are most at fault. Are our on-time delivery rate and average delay for West region shipments contributing to the problem? How many total shipments went out and how many were late? I also need our current fill rate, how many inventory positions are sitting below safety stock in the West region, how many unique SKUs are affected, what is our days of supply for those at-risk items, and how many SKUs are completely stocked out. On the vendor side: what percentage of vendors delivered late in August, how many purchase orders were late out of total, what is the average lead time variance, and what are the total vendor SLA penalties we have incurred? Bring it all together as our total Cost of Disruption by region for August 2026 — cancelled revenue, at-risk backorder revenue, wasted freight on late shipments, and supplier penalty exposure in one number per region. Are we going to miss our Q3 service-level targets, and what are the top actions we should take?"
 # MAGIC
-# MAGIC This notebook shows the **correct, verified output** that the Supervisor Agent should produce after
-# MAGIC all 5 improvement iterations. Every number is computed from direct SQL against the actual data.
+# MAGIC This notebook shows the **correct, verified output** that the Supervisor Agent should produce.
+# MAGIC Every number is computed from direct SQL against the actual data at **2 decimal precision**.
+# MAGIC All values validated via empirical assumption testing against Genie agents (see 00_run_all Assumption Tester v2).
 
 # COMMAND ----------
 
@@ -87,9 +86,16 @@ df1.display()
 
 # DBTITLE 1,Finding: Revenue by Region
 # MAGIC %md
-# MAGIC **Finding**: Western revenue dropped **-$1,240,330 (-27.1%)** last month -- by far the largest decline. Other regions show smaller declines.
+# MAGIC **Finding**: Western revenue dropped **-$1,240,330.12 (-27.07%)** in August 2026 vs July 2026 -- by far the largest decline.
+# MAGIC
+# MAGIC * Western: Aug **$3,341,062.58**, Jul $4,581,392.70, change **-$1,240,330.12 (-27.07%)**
+# MAGIC * Southern: Aug $4,175,882.05, Jul $4,377,166.50, change -$201,284.45 (-4.60%)
+# MAGIC * Eastern: Aug $4,189,811.21, Jul $4,342,727.70, change -$152,916.49 (-3.50%)
+# MAGIC * Central: Aug $4,094,683.96, Jul $4,188,864.89, change -$94,180.93 (-2.20%)
 # MAGIC
 # MAGIC **Confidence**: HIGH -- complete data, 4 regions, calendar month boundaries, clear pattern.
+# MAGIC
+# MAGIC **Empirically verified**: Agent returns $3,341,062.58 (A1) and -$1,240,330.12 (A2) at baseline with no synonyms.
 
 # COMMAND ----------
 
@@ -154,7 +160,13 @@ df3.display()
 
 # DBTITLE 1,Finding: Order Status
 # MAGIC %md
-# MAGIC **Finding**: Significant portion of Western orders are backordered or cancelled, representing substantial at-risk revenue. Uses calendar month boundaries for consistency.
+# MAGIC **Finding**: Western Aug 2026 order breakdown:
+# MAGIC * Fulfilled: **1,342 orders (71.23%)** — $2,397,445.86
+# MAGIC * Backordered: **275 orders (14.60%)** — $474,164.83 at-risk revenue
+# MAGIC * Partially_Fulfilled: 170 orders (9.00%) — $290,032.63
+# MAGIC * Cancelled: **97 orders (5.10%)** — **$179,419.26** cancelled revenue
+# MAGIC
+# MAGIC **Confidence**: HIGH -- calendar month boundaries, all statuses captured.
 
 # COMMAND ----------
 
@@ -169,18 +181,20 @@ df3.display()
 
 # COMMAND ----------
 
-# Use the metric view for authoritative safety stock counts
-# sku_warehouse_positions_below_safety_stock = COUNT(*) across all warehouses (ground truth = 107 for Western)
-# unique_skus_below_safety_stock = COUNT(DISTINCT sku_id) = 59 for Western (NOT the ground truth metric)
+# DBTITLE 1,Query 4: Inventory by Region (baseline SQL, no metric view)
+# Inventory metrics from base table (no metric view needed — agent gets this right at baseline)
 df4 = spark.sql(f"""
-SELECT region,
-  unique_skus_in_stockout AS stockout_skus,
-  sku_warehouse_positions_below_safety_stock AS below_safety_stock,
-  unique_skus_below_safety_stock,
-  warehouses_affected,
-  avg_days_of_supply_below_safety
-FROM {CATALOG}.inventory_management.inventory_safety_stock_metrics
-ORDER BY sku_warehouse_positions_below_safety_stock DESC
+SELECT
+  region,
+  COUNT(*) AS positions_below_safety_stock,
+  COUNT(DISTINCT sku_id) AS unique_skus_below_safety,
+  SUM(CASE WHEN stockout_flag = true THEN 1 ELSE 0 END) AS stockout_positions,
+  COUNT(DISTINCT CASE WHEN stockout_flag = true THEN sku_id END) AS stockout_skus,
+  ROUND(AVG(days_of_supply), 2) AS avg_days_of_supply
+FROM {CATALOG}.inventory_management.inventory_ledger
+WHERE below_safety_stock_flag = true
+GROUP BY region
+ORDER BY positions_below_safety_stock DESC
 """)
 df4.display()
 
@@ -188,11 +202,16 @@ df4.display()
 
 # DBTITLE 1,Finding: Stockouts
 # MAGIC %md
-# MAGIC **Finding**: Western has **33 SKU stockouts** (other regions: near zero). Western has **109 SKU-warehouse positions below safety stock** across 3 warehouses. Days of supply for at-risk items is **1.0 day** in Western.
+# MAGIC **Finding**: Western inventory is in crisis:
+# MAGIC * **109** SKU-warehouse positions below safety stock (COUNT(*))
+# MAGIC * **61** unique SKUs below safety stock (COUNT(DISTINCT sku_id))
+# MAGIC * **33** unique SKUs completely stocked out
+# MAGIC * **0.96 days** average days of supply for at-risk items
 # MAGIC
-# MAGIC **Note**: The ground truth metric for "below safety stock" is `sku_warehouse_positions_below_safety_stock` (=109), NOT `unique_skus_below_safety_stock` (=61) or `unique_skus_in_stockout` (=33). This metric view eliminates the COUNT(*) vs COUNT(DISTINCT) ambiguity.
+# MAGIC **Empirically verified**: Agent returns 109 (A8) and 33 (A9) at baseline with correct SQL — no comments needed.
+# MAGIC The agent naturally uses COUNT(*) for "positions" and COUNT(DISTINCT sku_id) for "SKUs".
 # MAGIC
-# MAGIC **Confidence**: HIGH -- metric view provides authoritative counts.
+# MAGIC **Confidence**: HIGH -- direct from inventory_ledger.
 
 # COMMAND ----------
 
@@ -225,8 +244,10 @@ df5.display()
 
 # DBTITLE 1,Finding: Late Delivery
 # MAGIC %md
-# MAGIC **Finding**: Western has **94.6% late delivery rate** last month (1,027/1,086 shipments late, avg 2.9 day delay).
-# MAGIC Other regions: Eastern 29.7%, Southern 28.7%, Central 27.8%. Western is 3.2x worse than the next region.
+# MAGIC **Finding**: Western has **94.57% late delivery rate** in August 2026 (1,027 of 1,086 shipments late, avg **2.94 day** delay).
+# MAGIC On-time delivery rate: **5.43%**. Wasted freight cost on late shipments: **$2,484,985.57**.
+# MAGIC
+# MAGIC **Empirically verified**: Agent returns OTD 5.43% (A4), avg delay 2.94 days (A10), and wasted freight $2,484,985.57 (A3) at baseline with correct SQL. No synonyms or metric views needed for any of these.
 # MAGIC
 # MAGIC **Confidence**: HIGH -- complete shipment data, calendar month boundaries.
 
@@ -286,8 +307,11 @@ df7.display()
 
 # DBTITLE 1,Finding: Supplier Performance
 # MAGIC %md
-# MAGIC **Finding**: Asia suppliers are **100% late** (30/30 POs) with **+13.7 day average variance** last month.
-# MAGIC North America 40.0% late, Europe 30.8% late. Asian supply chain is completely disrupted.
+# MAGIC **Finding**: Asia suppliers are **100.00% late** (30/30 POs) with **+13.67 day** average lead time variance in August 2026.
+# MAGIC Overall: **48 total POs**, **36 late** (**75.00%**), avg lead time variance **8.69 days**.
+# MAGIC Total vendor SLA penalties: **$1,185,043.10**.
+# MAGIC
+# MAGIC **Empirically verified**: Agent returns SLA penalties $1,185,043.10 (A6) and late PO count 36/48 (A14) at baseline. However, A7 shows the agent interprets "% of vendors delivered late" as per-vendor (83.33%) not per-order (75.00%) — this is a genuine semantic ambiguity that needs a certified query or metric view. A13 shows the agent queries the wrong table (supplier_lead_times instead of supplier_orders) for lead time variance — gets 6.075 instead of 8.69.
 # MAGIC
 # MAGIC **Confidence**: HIGH -- all POs in the calendar month captured.
 
@@ -333,12 +357,16 @@ df9.display()
 
 # DBTITLE 1,Finding: Executive KPIs
 # MAGIC %md
-# MAGIC **Executive KPIs**:
-# MAGIC - Revenue last month: \~$15.8M (prior month: \~$17.5M) -- **-9.7% overall decline**
-# MAGIC - Stockout SKUs: **33** (33 concentrated in Western)
-# MAGIC - Late delivery (last month): company-wide, **94.6%** Western
-# MAGIC - Supplier late (last month): **75.0%**
-# MAGIC - Service level: **70.4%** (target: 95%)
+# MAGIC **Executive KPIs** (all at 2 decimal precision):
+# MAGIC * Service level (fill rate): **80.70%** (target: 95.00%) — agent finds this at baseline (A5)
+# MAGIC * Western OTD rate: **5.43%** — agent finds this at baseline (A4)
+# MAGIC * Western late delivery rate: **94.57%**
+# MAGIC * Western avg delay: **2.94 days** — agent finds this at baseline (A10)
+# MAGIC * Vendor late delivery % (per-order): **75.00%** — A7 CONFIRMED: agent gets 83.33% (per-vendor interpretation)
+# MAGIC * Total SLA penalties: **$1,185,043.10** — agent finds this at baseline (A6)
+# MAGIC * Western positions below safety stock: **109** — agent finds this at baseline (A8)
+# MAGIC * Western stockout SKUs: **33** — agent finds this at baseline (A9)
+# MAGIC * Western Cost of Disruption: **$3,757,298.31** — A12 CONFIRMED: agent cannot compute (no table exists)
 
 # COMMAND ----------
 
@@ -347,13 +375,32 @@ df9.display()
 # MAGIC ---
 # MAGIC ## 4. Cross-Domain Reconciliation
 # MAGIC
-# MAGIC | KPI | Demand Agent | Executive Agent | Match? |
+# MAGIC | KPI | Value | Source | Agent Baseline? |
 # MAGIC | --- | --- | --- | --- |
-# MAGIC | Revenue Last Month | Sum of 4 regions = \~$15.8M | executive_kpis = \~$15.8M | YES |
-# MAGIC | Stockout SKUs | Inventory: 33 total (33 Western) | executive_kpis: 33 | EXACT |
-# MAGIC | Late Delivery % (Western) | Logistics: 94.6% | Ground truth: 94.6% | EXACT |
-# MAGIC | Service Level | 70.4% | executive_kpis: 70.4% | EXACT |
-# MAGIC | Western Below Safety Stock | Metric view: 109 positions | Ground truth: 109 | EXACT |
+# MAGIC | Western Aug Revenue | $3,341,062.58 | demand_analysis.sales_orders | ✅ A1 DISPROVED |
+# MAGIC | Western Jul Revenue | $4,581,392.70 | demand_analysis.sales_orders | ✅ A2 DISPROVED |
+# MAGIC | Western Revenue MoM Change | -$1,240,330.12 (-27.07%) | demand_analysis.sales_orders | ✅ A2 DISPROVED |
+# MAGIC | Western OTD Rate | 5.43% | logistics_operations.shipments | ✅ A4 DISPROVED |
+# MAGIC | Western Late Delivery Rate | 94.57% | logistics_operations.shipments | supporting |
+# MAGIC | Western Avg Delay (late) | 2.94 days | logistics_operations.shipments | ✅ A10 DISPROVED |
+# MAGIC | Western Total Shipments | 1,086 | logistics_operations.shipments | supporting |
+# MAGIC | Western Late Shipments | 1,027 | logistics_operations.shipments | supporting |
+# MAGIC | Western Wasted Freight | $2,484,985.57 | logistics_operations.shipments | ✅ A3 DISPROVED |
+# MAGIC | Fill Rate | 80.70% | reporting.executive_kpis | ✅ A5 DISPROVED |
+# MAGIC | Western Below Safety Stock | 109 positions | inventory_management.inventory_ledger | ✅ A8 DISPROVED |
+# MAGIC | Western Unique SKUs at Risk | 61 | inventory_management.inventory_ledger | supporting |
+# MAGIC | Western Stockout SKUs | 33 | inventory_management.inventory_ledger | ✅ A9 DISPROVED |
+# MAGIC | Western Avg Days of Supply | 0.96 days | inventory_management.inventory_ledger | supporting |
+# MAGIC | Vendor Late % (per-order) | 75.00% | supplier_procurement.supplier_orders | ❌ A7 CONFIRMED |
+# MAGIC | Total POs Aug | 48 | supplier_procurement.supplier_orders | supporting |
+# MAGIC | Late POs Aug | 36 | supplier_procurement.supplier_orders | ✅ A14 DISPROVED |
+# MAGIC | Avg Lead Time Variance | 8.69 days | supplier_procurement.supplier_orders | ❌ A13 CONFIRMED |
+# MAGIC | Total SLA Penalties | $1,185,043.10 | supplier_procurement.vendor_slas | ✅ A6 DISPROVED |
+# MAGIC | Western Fulfilled Order % | 71.23% | demand_analysis.sales_orders | supporting |
+# MAGIC | Western Backordered Orders | 275 | demand_analysis.sales_orders | supporting |
+# MAGIC | Western Cancelled Revenue | $179,419.26 | demand_analysis.sales_orders | supporting |
+# MAGIC | Western Cost of Disruption | $3,757,298.31 | reporting.cost_of_disruption_by_region | ❌ A12 CONFIRMED |
+# MAGIC | Q3 Service-Level Target | 95.00% | UC Page (not in any table) | manual |
 
 # COMMAND ----------
 
@@ -364,29 +411,29 @@ df9.display()
 # MAGIC
 # MAGIC ```
 # MAGIC UPSTREAM CAUSE:
-# MAGIC   Asian suppliers 100% late (30/30 POs, avg +13.7 days) last month
+# MAGIC   Asian suppliers 100.00% late (30/30 POs, avg +13.67 days) August 2026
 # MAGIC   └─ SUP-001 TextilePro Asia remains the top risk supplier
 # MAGIC   └─ 5 of top 5 risk suppliers are in Asia
 # MAGIC        │
 # MAGIC        ▼
 # MAGIC INVENTORY IMPACT:
 # MAGIC   Western warehouses depleted (33 SKU stockouts, 109 SKU-warehouse positions below safety stock)
-# MAGIC   └─ Western days of supply for at-risk items: 1.0 day
+# MAGIC   └─ Western days of supply for at-risk items: 0.96 days
 # MAGIC   └─ Other regions show materially lower safety-stock stress
 # MAGIC        │
 # MAGIC        ▼
 # MAGIC LOGISTICS BREAKDOWN:
-# MAGIC   94.6% of Western-bound shipments late last month (1,027/1,086, avg 2.9 day delay)
+# MAGIC   94.57% of Western-bound shipments late in August 2026 (1,027/1,086, avg 2.94 day delay)
 # MAGIC   └─ Delays are broad-based: Weather, Labor Shortage, Customs Hold, Carrier Capacity, Port Congestion
 # MAGIC   └─ This is a systemic logistics issue, not a single-point failure
 # MAGIC        │
 # MAGIC        ▼
 # MAGIC REVENUE IMPACT:
-# MAGIC   Western revenue -$1,240K (-27.1%) last month
+# MAGIC   Western revenue -$1,240,330.12 (-27.07%) August 2026
 # MAGIC   └─ All 5 product families declined 24-29%
-# MAGIC   └─ Home Goods worst: -$349K (-28.9%)
-# MAGIC   └─ 542 unfulfilled orders = $944K at-risk revenue
-# MAGIC   └─ Service level: 70.4% (below 95% target)
+# MAGIC   └─ Home Goods worst: -$349,062.88 (-28.90%)
+# MAGIC   └─ 542 unfulfilled orders = $943,616.72 at-risk revenue
+# MAGIC   └─ Service level: 80.70% (below 95.00% target)
 # MAGIC ```
 
 # COMMAND ----------

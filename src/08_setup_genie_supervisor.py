@@ -47,16 +47,31 @@ print(f"Connected to: {host}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Define Genie Agent Spaces (Baseline — tables + lean instructions only)
 # ====================================================================
-# GENIE SPACE CONFIGURATIONS -- RAW BASELINE (deliberately minimal)
-# These spaces have just table identifiers and minimal instructions.
-# Certified queries, column synonyms, and enhanced instructions are
-# added progressively by the iteration scripts (02, 03, 04).
+# GENIE SPACE CONFIGURATIONS -- BASELINE
+# Tables + proper instructions describing domain, tables, key columns,
+# and how to handle out-of-scope questions. NO certified queries,
+# NO column synonyms, NO metric views — those come in iterations.
 # ====================================================================
 spaces_config = {
     "SC - Demand Analysis": {
         "description": "Demand Analysis specialist for the Supply Chain Control Tower.",
-        "instructions": "You are a Demand Analysis agent. Answer questions about sales, revenue, and demand forecasts.",
+        "instructions": (
+            "You are a Demand Analysis agent for a retail supply chain. "
+            "You answer questions about sales orders, revenue, demand forecasts, "
+            "product performance, and customer segmentation.\n\n"
+            "TABLES:\n"
+            "- sales_orders: order_id, order_date, region, state, product_family, product_category, "
+            "sku_id, customer_id, channel, quantity, unit_price, total_amount, order_status, "
+            "fulfillment_warehouse.\n"
+            "- demand_forecasts: Forecasted demand by SKU and period.\n"
+            "- products: Product master data.\n"
+            "- customer_segments: Customer segmentation.\n"
+            "- promotions: Promotional campaigns.\n"
+            "- pos_data: Point-of-sale transactions.\n\n"
+            "If you cannot answer a question from the tables available to you, say so."
+        ),
         "tables": sorted([
             {"identifier": f"{CATALOG}.demand_analysis.customer_segments"},
             {"identifier": f"{CATALOG}.demand_analysis.demand_forecasts"},
@@ -68,7 +83,19 @@ spaces_config = {
     },
     "SC - Inventory Management": {
         "description": "Inventory Management specialist for the Supply Chain Control Tower.",
-        "instructions": "You are an Inventory Management agent. Answer questions about inventory levels, stockouts, and warehouse operations.",
+        "instructions": (
+            "You are an Inventory Management agent for a retail supply chain. "
+            "You answer questions about inventory levels, safety stock, stockouts, "
+            "warehouse capacity, and stock movements.\n\n"
+            "TABLES:\n"
+            "- inventory_ledger: ledger_id, sku_id, warehouse_id, region, on_hand_qty, available_qty, "
+            "allocated_qty, safety_stock_level, reorder_point, below_safety_stock_flag (BOOLEAN), "
+            "stockout_flag (BOOLEAN), days_of_supply, snapshot_date, product_family, product_category.\n"
+            "- stock_movements: Inbound/outbound stock movement transactions.\n"
+            "- store_inventory: Store-level inventory positions.\n"
+            "- warehouse_data: Warehouse master data.\n\n"
+            "If you cannot answer a question from the tables available to you, say so."
+        ),
         "tables": sorted([
             {"identifier": f"{CATALOG}.inventory_management.inventory_ledger"},
             {"identifier": f"{CATALOG}.inventory_management.stock_movements"},
@@ -78,7 +105,21 @@ spaces_config = {
     },
     "SC - Logistics Operations": {
         "description": "Logistics Operations specialist for the Supply Chain Control Tower.",
-        "instructions": "You are a Logistics Operations agent. Answer questions about shipments, deliveries, and transit performance.",
+        "instructions": (
+            "You are a Logistics Operations agent for a retail supply chain. "
+            "You answer questions about shipment performance, delivery timeliness, "
+            "freight costs, carriers, and distribution centers.\n\n"
+            "TABLES:\n"
+            "- shipments: shipment_id, ship_date, destination_region, destination_state, origin_region, "
+            "origin_warehouse, carrier_id, is_late (BOOLEAN), delay_days (INTEGER), "
+            "delay_reason, shipping_cost (DOUBLE), actual_delivery_date, "
+            "expected_delivery_date, actual_transit_days, planned_transit_days, shipment_status, "
+            "shipment_type, total_weight_kg, total_pallets, order_count.\n"
+            "- carriers: Carrier master data.\n"
+            "- distribution_centers: DC locations and capacity.\n"
+            "- transit_data: Detailed transit leg data.\n\n"
+            "If you cannot answer a question from the tables available to you, say so."
+        ),
         "tables": sorted([
             {"identifier": f"{CATALOG}.logistics_operations.carriers"},
             {"identifier": f"{CATALOG}.logistics_operations.distribution_centers"},
@@ -88,7 +129,23 @@ spaces_config = {
     },
     "SC - Supplier Risk": {
         "description": "Supplier Risk specialist for the Supply Chain Control Tower.",
-        "instructions": "You are a Supplier Risk agent. Answer questions about supplier performance, lead times, and procurement.",
+        "instructions": (
+            "You are a Supplier Risk agent for a retail supply chain. "
+            "You answer questions about supplier performance, purchase orders, "
+            "lead times, quality, and SLA compliance.\n\n"
+            "TABLES:\n"
+            "- supplier_orders: po_id, order_date, supplier_id, supplier_name, supplier_continent, "
+            "supplier_country, is_late (BOOLEAN), lead_time_variance_days (INTEGER), "
+            "actual_lead_time_days, contracted_lead_time_days, total_cost, unit_cost, "
+            "quantity_ordered, quantity_received, quality_score, product_family, po_status, "
+            "delay_reason, expected_delivery_date, actual_delivery_date.\n"
+            "- supplier_lead_times: Monthly aggregated supplier performance summaries per supplier.\n"
+            "- vendor_slas: sla_id, supplier_id, supplier_name, sla_metric, target_pct, actual_pct, "
+            "variance_pct, is_breached (BOOLEAN), penalty_amount (DOUBLE), review_period, last_updated.\n"
+            "- suppliers: Supplier master data.\n"
+            "- procurement_data: Procurement transaction details.\n\n"
+            "If you cannot answer a question from the tables available to you, say so."
+        ),
         "tables": sorted([
             {"identifier": f"{CATALOG}.supplier_procurement.procurement_data"},
             {"identifier": f"{CATALOG}.supplier_procurement.supplier_lead_times"},
@@ -99,7 +156,20 @@ spaces_config = {
     },
     "SC - Executive Reporting": {
         "description": "Executive Reporting specialist for the Supply Chain Control Tower.",
-        "instructions": "You are an Executive Reporting agent. Answer questions about overall KPI performance and regional comparisons.",
+        "instructions": (
+            "You are an Executive Reporting agent for a retail supply chain. "
+            "You answer questions about company-wide KPIs, regional performance, "
+            "revenue trends, and risk scorecards.\n\n"
+            "TABLES:\n"
+            "- executive_kpis: revenue_last_month, revenue_prior_month, total_stockout_skus, "
+            "avg_days_of_supply, late_delivery_pct_last_month, avg_delay_days_last_month, "
+            "supplier_late_pct_last_month, total_sla_breaches, service_level_pct.\n"
+            "- regional_performance_summary: region, total_orders, avg_order_value, total_revenue, "
+            "fulfillment_rate, stockout_skus, late_shipment_pct.\n"
+            "- revenue_trend: Historical revenue data across periods.\n"
+            "- supply_chain_risk_scorecard: Risk scores by dimension.\n\n"
+            "If you cannot answer a question from the tables available to you, say so."
+        ),
         "tables": sorted([
             {"identifier": f"{CATALOG}.reporting.executive_kpis"},
             {"identifier": f"{CATALOG}.reporting.regional_performance_summary"},
@@ -211,96 +281,94 @@ CREATE TABLE {CATALOG}.reporting.ground_truth_kpis (
   calculated_at TIMESTAMP COMMENT 'When this ground truth was last computed'
 ) USING DELTA
 """)
+# Use INSERT ... SELECT with UNION ALL to avoid scalar subqueries in VALUES clause
 spark.sql(f"""
-INSERT INTO {CATALOG}.reporting.ground_truth_kpis (agent, metric, ground_truth_value, uc_feature_needed, calculated_at) VALUES
-  ('demand-analysis', 'Western revenue MoM change (Aug vs Jul 2026)',
-   CAST((
-     SELECT ROUND(
-       SUM(CASE WHEN order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01' THEN total_amount ELSE 0 END)
-     - SUM(CASE WHEN order_date >= DATE '2026-07-01' AND order_date < DATE '2026-08-01' THEN total_amount ELSE 0 END), 2)
-     FROM {CATALOG}.demand_analysis.sales_orders WHERE region = 'Western'
-   ) AS STRING),
-   'synonym: revenue to total_amount + certified query for MoM calc', CURRENT_TIMESTAMP()),
+INSERT INTO {CATALOG}.reporting.ground_truth_kpis (agent, metric, ground_truth_value, uc_feature_needed, calculated_at)
 
-  ('logistics-operations', 'Western on-time delivery rate (Aug 2026)',
-   CAST((
-     SELECT ROUND(AVG(CASE WHEN is_late = false THEN 1.0 ELSE 0.0 END) * 100, 1)
-     FROM {CATALOG}.logistics_operations.shipments
-     WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
-       AND destination_region = 'Western'
-   ) AS STRING),
-   'synonym: OTD to is_late (inverse) + metric view with pre-computed OTD', CURRENT_TIMESTAMP()),
+SELECT 'demand-analysis', 'Western revenue MoM change (Aug vs Jul 2026)',
+  CAST(ROUND(
+    SUM(CASE WHEN order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01' THEN total_amount ELSE 0 END)
+  - SUM(CASE WHEN order_date >= DATE '2026-07-01' AND order_date < DATE '2026-08-01' THEN total_amount ELSE 0 END), 2) AS STRING),
+  'synonym: revenue to total_amount + certified query for MoM calc', CURRENT_TIMESTAMP()
+FROM {CATALOG}.demand_analysis.sales_orders WHERE region = 'Western'
 
-  ('executive-reporting', 'Fill rate',
-   CAST((SELECT service_level_pct FROM {CATALOG}.reporting.executive_kpis) AS STRING),
-   'synonym: fill_rate to service_level_pct', CURRENT_TIMESTAMP()),
+UNION ALL
+SELECT 'logistics-operations', 'Western on-time delivery rate (Aug 2026)',
+  CAST(ROUND(AVG(CASE WHEN is_late = false THEN 1.0 ELSE 0.0 END) * 100, 1) AS STRING),
+  'synonym: OTD to is_late (inverse) + metric view with pre-computed OTD', CURRENT_TIMESTAMP()
+FROM {CATALOG}.logistics_operations.shipments
+WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
+  AND destination_region = 'Western'
 
-  ('inventory-management', 'Western below safety stock positions',
-   CAST((
-     SELECT COUNT(*) FROM {CATALOG}.inventory_management.inventory_ledger
-     WHERE region = 'Western' AND below_safety_stock_flag = true
-   ) AS STRING),
-   'column comment: per SKU-warehouse position not per SKU', CURRENT_TIMESTAMP()),
+UNION ALL
+SELECT 'executive-reporting', 'Fill rate',
+  CAST(service_level_pct AS STRING),
+  'synonym: fill_rate to service_level_pct', CURRENT_TIMESTAMP()
+FROM {CATALOG}.reporting.executive_kpis
 
-  ('inventory-management', 'Western stockout SKUs',
-   CAST((
-     SELECT COUNT(DISTINCT sku_id) FROM {CATALOG}.inventory_management.inventory_ledger
-     WHERE region = 'Western' AND stockout_flag = true
-   ) AS STRING),
-   'column comment: COUNT DISTINCT sku_id WHERE stockout_flag', CURRENT_TIMESTAMP()),
+UNION ALL
+SELECT 'inventory-management', 'Western below safety stock positions',
+  CAST(COUNT(*) AS STRING),
+  'column comment: per SKU-warehouse position not per SKU', CURRENT_TIMESTAMP()
+FROM {CATALOG}.inventory_management.inventory_ledger
+WHERE region = 'Western' AND below_safety_stock_flag = true
 
-  ('supplier-risk', 'Total vendor SLA penalties (Aug 2026)',
-   CAST((
-     SELECT ROUND(SUM(penalty_amount), 1) FROM {CATALOG}.supplier_procurement.vendor_slas
-     WHERE is_breached = true
-   ) AS STRING),
-   'synonym: vendor to supplier + penalty_amount in vendor_slas', CURRENT_TIMESTAMP()),
+UNION ALL
+SELECT 'inventory-management', 'Western stockout SKUs',
+  CAST(COUNT(DISTINCT sku_id) AS STRING),
+  'column comment: COUNT DISTINCT sku_id WHERE stockout_flag', CURRENT_TIMESTAMP()
+FROM {CATALOG}.inventory_management.inventory_ledger
+WHERE region = 'Western' AND stockout_flag = true
 
-  ('supplier-risk', 'Vendor late delivery pct (Aug 2026)',
-   CAST((
-     SELECT ROUND(AVG(CASE WHEN is_late THEN 1.0 ELSE 0.0 END) * 100, 1)
-     FROM {CATALOG}.supplier_procurement.supplier_orders
-     WHERE order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01'
-   ) AS STRING),
-   'synonym: vendor to supplier', CURRENT_TIMESTAMP()),
+UNION ALL
+SELECT 'supplier-risk', 'Total vendor SLA penalties (Aug 2026)',
+  CAST(ROUND(SUM(penalty_amount), 1) AS STRING),
+  'synonym: vendor to supplier + penalty_amount in vendor_slas', CURRENT_TIMESTAMP()
+FROM {CATALOG}.supplier_procurement.vendor_slas
+WHERE is_breached = true
 
-  ('logistics-operations', 'Western avg delay days (Aug 2026)',
-   CAST((
-     SELECT ROUND(AVG(CASE WHEN is_late THEN delay_days END), 1)
-     FROM {CATALOG}.logistics_operations.shipments
-     WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
-       AND destination_region = 'Western'
-   ) AS STRING),
-   'direct: delay_days column is self-documenting', CURRENT_TIMESTAMP()),
+UNION ALL
+SELECT 'supplier-risk', 'Vendor late delivery pct (Aug 2026)',
+  CAST(ROUND(AVG(CASE WHEN is_late THEN 1.0 ELSE 0.0 END) * 100, 1) AS STRING),
+  'synonym: vendor to supplier', CURRENT_TIMESTAMP()
+FROM {CATALOG}.supplier_procurement.supplier_orders
+WHERE order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01'
 
-  ('executive-reporting', 'Western Cost of Disruption',
-   CAST((
-     SELECT ROUND(lr.cancelled_revenue + lr.backordered_at_risk_revenue
-                  + lw.wasted_logistics_spend
-                  + tp.total_sla_penalties * ls.pct_of_late_shipments, 2)
-     FROM (
-       SELECT ROUND(SUM(CASE WHEN order_status = 'Cancelled' THEN total_amount ELSE 0 END), 2) AS cancelled_revenue,
-              ROUND(SUM(CASE WHEN order_status = 'Backordered' THEN total_amount ELSE 0 END), 2) AS backordered_at_risk_revenue
-       FROM {CATALOG}.demand_analysis.sales_orders
-       WHERE region = 'Western' AND order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01'
-     ) lr
-     CROSS JOIN (
-       SELECT ROUND(SUM(CASE WHEN is_late THEN shipping_cost ELSE 0 END), 2) AS wasted_logistics_spend
-       FROM {CATALOG}.logistics_operations.shipments
-       WHERE destination_region = 'Western' AND ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
-     ) lw
-     CROSS JOIN (
-       SELECT ROUND(SUM(penalty_amount), 2) AS total_sla_penalties
-       FROM {CATALOG}.supplier_procurement.vendor_slas WHERE is_breached = true
-     ) tp
-     CROSS JOIN (
-       SELECT COUNT(CASE WHEN is_late AND destination_region = 'Western' THEN 1 END) * 1.0
-              / COUNT(CASE WHEN is_late THEN 1 END) AS pct_of_late_shipments
-       FROM {CATALOG}.logistics_operations.shipments
-       WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
-     ) ls
-   ) AS STRING),
-   'metric view: cross-domain join only available after Iter 4', CURRENT_TIMESTAMP())
+UNION ALL
+SELECT 'logistics-operations', 'Western avg delay days (Aug 2026)',
+  CAST(ROUND(AVG(CASE WHEN is_late THEN delay_days END), 1) AS STRING),
+  'direct: delay_days column is self-documenting', CURRENT_TIMESTAMP()
+FROM {CATALOG}.logistics_operations.shipments
+WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
+  AND destination_region = 'Western'
+
+UNION ALL
+SELECT 'executive-reporting', 'Western Cost of Disruption',
+  CAST(ROUND(lr.cancelled_revenue + lr.backordered_at_risk_revenue
+             + lw.wasted_logistics_spend
+             + tp.total_sla_penalties * ls.pct_of_late_shipments, 2) AS STRING),
+  'metric view: cross-domain join only available after Iter 4', CURRENT_TIMESTAMP()
+FROM (
+  SELECT ROUND(SUM(CASE WHEN order_status = 'Cancelled' THEN total_amount ELSE 0 END), 2) AS cancelled_revenue,
+         ROUND(SUM(CASE WHEN order_status = 'Backordered' THEN total_amount ELSE 0 END), 2) AS backordered_at_risk_revenue
+  FROM {CATALOG}.demand_analysis.sales_orders
+  WHERE region = 'Western' AND order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01'
+) lr
+CROSS JOIN (
+  SELECT ROUND(SUM(CASE WHEN is_late THEN shipping_cost ELSE 0 END), 2) AS wasted_logistics_spend
+  FROM {CATALOG}.logistics_operations.shipments
+  WHERE destination_region = 'Western' AND ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
+) lw
+CROSS JOIN (
+  SELECT ROUND(SUM(penalty_amount), 2) AS total_sla_penalties
+  FROM {CATALOG}.supplier_procurement.vendor_slas WHERE is_breached = true
+) tp
+CROSS JOIN (
+  SELECT COUNT(CASE WHEN is_late AND destination_region = 'Western' THEN 1 END) * 1.0
+         / COUNT(CASE WHEN is_late THEN 1 END) AS pct_of_late_shipments
+  FROM {CATALOG}.logistics_operations.shipments
+  WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
+) ls
 """)
 print(f"✓ Ground truth table created: {CATALOG}.reporting.ground_truth_kpis")
 spark.sql(f"SELECT * FROM {CATALOG}.reporting.ground_truth_kpis ORDER BY agent, metric").display()

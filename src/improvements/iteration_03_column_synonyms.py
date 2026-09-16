@@ -75,58 +75,34 @@ space_lookup = {s["title"]: s["space_id"] for s in resp.json().get("spaces", [])
 
 # DBTITLE 1,Synonym and Enhanced Instruction Definitions
 # ====================================================================
-# ENHANCED SPACE INSTRUCTIONS (the key improvement that drives 20% → 50%)
-# These replace the minimal baseline instructions with domain-specific
-# guidance about time windows, column names, and query patterns.
+# ENHANCED SPACE INSTRUCTIONS (Iteration 2 — applied WITH synonyms)
+# Adds domain specialization. NO dates, NO SQL patterns, NO "demo".
+# The synonyms (below) do the heavy lifting for column mapping.
 # ====================================================================
 enhanced_instructions = {
-    "SC - Demand Analysis": """You are a Demand Analysis specialist for supply chain revenue and forecasting.
+    "SC - Demand Analysis": """You are a Demand Analysis agent specializing in sales orders, revenue trends, demand forecasting, and product performance for a retail supply chain.
 
-TIME PERIOD RULES (CRITICAL):
-- The demo dataset uses September 1, 2026 as the reference date. 'Last month' = August 2026, 'Prior month' = July 2026.
-- 'Last month': order_date >= '2026-08-01' AND order_date < '2026-09-01'
-- 'Prior month': order_date >= '2026-07-01' AND order_date < '2026-08-01'
-- ALWAYS use these exact date boundaries, never rolling day windows.
+If you cannot answer a question from the tables available to you, say so.""",
 
-KEY COLUMNS: Use 'total_amount' for revenue. Use 'product_family' (not product_category) for top-level grouping. Region values: Western, Eastern, Central, Southern.""",
+    "SC - Inventory Management": """You are an Inventory Management agent specializing in inventory levels, safety stock monitoring, stockout detection, and warehouse operations for a retail supply chain.
 
-    "SC - Inventory Management": """You are an Inventory Management specialist.
+If you cannot answer a question from the tables available to you, say so.""",
 
-KEY COLUMNS:
-- stockout_flag = true means zero inventory (complete stockout)
-- below_safety_stock_flag = true means inventory is at risk
-- days_of_supply < 7 is critical
-- Use COUNT(DISTINCT sku_id) when counting stockout SKUs, not COUNT(*)
+    "SC - Logistics Operations": """You are a Logistics Operations agent specializing in shipment tracking, delivery performance, freight costs, and carrier management for a retail supply chain.
 
-When asked about stockouts by region, query: SELECT region, COUNT(DISTINCT CASE WHEN stockout_flag = true THEN sku_id END) AS stockout_skus FROM inventory_ledger GROUP BY region""",
+Note: The shipments table uses 'destination_region' for the delivery region.
 
-    "SC - Logistics Operations": """You are a Logistics Operations specialist.
+If you cannot answer a question from the tables available to you, say so.""",
 
-CRITICAL SCHEMA NOTE:
-- The shipments table has 'destination_region' and 'origin_region' but NO column named 'region'
-- ALWAYS use destination_region when filtering or grouping by region
-- The demo dataset reference date is September 1, 2026. 'Last month' = August 2026.
-- 'Last month': ship_date >= '2026-08-01' AND ship_date < '2026-09-01'
-- ALWAYS use these exact date boundaries
-- is_late = true for late shipments, delay_days for delay duration""",
+    "SC - Supplier Risk": """You are a Supplier Risk agent specializing in supplier performance, purchase order tracking, lead time analysis, and SLA compliance for a retail supply chain.
 
-    "SC - Supplier Risk": """You are a Supplier Risk specialist.
+Note: Suppliers are organized by continent (supplier_continent), not by domestic region.
 
-CRITICAL SCHEMA NOTE:
-- supplier_orders has supplier_continent (Asia, Europe, North America) but NO region column
-- There is NO way to filter suppliers by 'Western region' or any other domestic region
-- When asked about suppliers for any region, ALWAYS show ALL suppliers grouped by continent
-- NEVER try to filter WHERE supplier_continent = 'North America' when asked about 'Western region'
-- The demo dataset reference date is September 1, 2026. 'Last month' = August 2026.
-- 'Last month': order_date >= '2026-08-01' AND order_date < '2026-09-01'""",
+If you cannot answer a question from the tables available to you, say so.""",
 
-    "SC - Executive Reporting": """You are an Executive Reporting specialist with cross-domain views.
+    "SC - Executive Reporting": """You are an Executive Reporting agent providing company-wide KPI dashboards, regional performance comparisons, and risk scorecards for a retail supply chain.
 
-KEY VIEWS:
-- executive_kpis: Single row with ALL headline KPIs (pre-computed for last calendar month)
-- regional_performance_summary: Cross-domain metrics per region
-- revenue_trend: Daily revenue with 'period' column (Last_Month / Prior_Month)
-- supply_chain_risk_scorecard: Supplier risk ranking (lowest composite_risk_score = highest risk)""",
+If you cannot answer a question from the tables available to you, say so.""",
 }
 
 # ====================================================================
