@@ -371,10 +371,11 @@ df7.display()
 
 # COMMAND ----------
 
+# DBTITLE 1,Query 8: Top Risk Suppliers
 df8 = spark.sql(f"""
 SELECT supplier_id, supplier_name, country, risk_tier,
-  composite_risk_score, breach_count, total_penalty,
-  latest_variance AS lead_time_variance_days
+  composite_risk_score, sla_breaches, total_penalty_usd,
+  lead_time_variance AS lead_time_variance_days
 FROM {CATALOG}.reporting.supply_chain_risk_scorecard
 ORDER BY composite_risk_score ASC LIMIT 5
 """)

@@ -19,7 +19,20 @@ Using a realistic supply chain scenario with 23 tables across 5 business domains
 
 ##### Ground Truth: Demo Proxy for Real-World Feedback
 
-> In this demo, we use a **benchmark ground-truth framework** — **10 primary KPIs** explicitly asked in the canonical prompt plus **14 indirect supporting metrics** that appear in the supporting analysis — to objectively measure whether the agents are generating the right SQL and returning the right numbers. After each improvement iteration, we compare the Supervisor's output against benchmark values and score it. Primary and indirect metrics should be tracked separately so the scorecard stays interpretable.
+> In this demo, we use a **benchmark ground-truth framework** — **40 metrics** across 8 groups — to objectively measure whether the agents are generating the right SQL and returning the right numbers. Each metric is tested individually by sending a targeted question to the relevant domain agent and comparing the response against a known ground-truth value at exact 2-decimal precision.
+>
+> | Group | Count | What It Tests |
+> | --- | --- | --- |
+> | A: Logistics MV | 6 | OTD rate, late rate, avg delay, shipment counts, wasted freight |
+> | B: Demand MV | 4 | Revenue (Aug vs Jul), dollar change, % change |
+> | C: Inventory MV | 5 | Below safety stock, stockouts, days of supply |
+> | D: Supplier MV | 7 | PO counts, late %, lead time variance (overall + by continent) |
+> | E: Cross-domain | 3 | Fill rate, SLA penalties, Cost of Disruption |
+> | F: Indirect / Ambiguity | 6 | Region synonyms, per-order vs per-vendor, status filters |
+> | H: Hard failures | 7 | Wrong table, cross-domain joins, derived ratios |
+> | G: Q3 Fiscal (UC Pages) | 2 | Q3 service-level target (only in UC Pages, not in any table) |
+>
+> After each improvement iteration, we rerun the failing tests and track progressive accuracy: Baseline (65%) → Iteration 1 (85%) → Iteration 2 (95%) → Iteration 3 (100%). A separate **comprehensive prompt benchmark** sends one broad executive question to the Supervisor Agent and scores how many of the 40 values appear in its unified report — testing whether UC improvements for individual metrics *indirectly* improve the Supervisor's coverage.
 
 > **In production, there is no ground truth table.** Instead, accuracy improves through an iterative **user feedback loop**:
 

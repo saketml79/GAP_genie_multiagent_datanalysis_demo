@@ -1,0 +1,13 @@
+# Action Intelligence Tracker — Databricks App Config
+command:
+  - streamlit
+  - run
+  - action_tracker_app.py
+  - --server.port
+  - "8501"
+
+env:
+  - name: CATALOG
+    value: GAP_Demo_Dev
+  - name: WAREHOUSE_ID
+    value: bf50738cf2819197
