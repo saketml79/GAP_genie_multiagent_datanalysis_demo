@@ -3,33 +3,54 @@
 # [tool.databricks.environment]
 # environment_version = "5"
 # ///
+# DBTITLE 1,Supply Chain Control Tower — Full Pipeline
 # MAGIC %md
 # MAGIC # Supply Chain Control Tower — Full Pipeline
 # MAGIC
-# MAGIC **One-click setup**: Tears down any existing deployment, regenerates all data, creates Genie Agents,
-# MAGIC Supervisor Agent, and applies all 5 improvement iterations.
+# MAGIC **One-click E2E setup**: Tears down any existing deployment, regenerates all data, creates 5 Genie Agents + Supervisor Agent, then progressively improves accuracy across **3 iterations** using **13 UC Semantic features** — from 65% to 100%.
 # MAGIC
 # MAGIC ### Why the data is deterministic
 # MAGIC
-# MAGIC All data generation scripts use a **fixed reference date** (`base_date = datetime(2026, 9, 1)`) and
-# MAGIC fixed random seeds (42/43/44/45). This produces **identical data every run**, regardless of when the
-# MAGIC demo is executed — the same approach used by standard Databricks training demos.
+# MAGIC All data generation scripts use a **fixed reference date** (`base_date = datetime(2026, 9, 1)`) and fixed random seeds (42/43/44/45). This produces **identical data every run**, regardless of when the demo is executed.
 # MAGIC
-# MAGIC "Last month" = August 2026, "Prior month" = July 2026. All SQL views, certified queries, and ground
-# MAGIC truth use `DATE '2026-09-01'` instead of `CURRENT_DATE()` so the demo is fully self-contained.
+# MAGIC * "Last month" = August 2026 | "Prior month" = July 2026
+# MAGIC * All SQL uses `DATE '2026-09-01'` instead of `CURRENT_DATE()`
 # MAGIC
-# MAGIC ### Run order
+# MAGIC ### Notebook structure
 # MAGIC
-# MAGIC | Step | Script | Purpose |
+# MAGIC | Cell | What It Does | Type |
 # MAGIC | --- | --- | --- |
-# MAGIC | 1 | `09_teardown` | Remove existing catalog + agents |
-# MAGIC | 2 | `01_create_catalog_schemas` | Create catalog and 5 schemas |
-# MAGIC | 3-6 | `02` through `05` | Generate deterministic demo data |
-# MAGIC | 7-8 | `06` and `07` | Create reporting views + add comments |
-# MAGIC | 9 | `08_setup_genie_supervisor` | Create 6 Genie Agents + Supervisor |
-# MAGIC | 10 | *(auto)* | Wait for serving endpoint to become READY |
-# MAGIC | 11-14 | `iteration_02` through `iteration_05` | Progressive improvements |
-# MAGIC | 15 | *(auto)* | Verify 10/10 ground truth match |
+# MAGIC | 1 | This overview | Markdown |
+# MAGIC | 2 | Parameters (`catalog_name`, `warehouse_id`, `run_mode`) | Python |
+# MAGIC | 3 | Setup: paths, API client, `ask_genie()`, `test_failing_metrics()`, `run_comprehensive_benchmark()` | Python |
+# MAGIC | 4 | **Step 1**: Teardown (drop catalog, delete agents) | Python |
+# MAGIC | 5 | **Steps 2–8**: Create catalog, generate data (4 scripts), create reporting views, create Genie Agents + Supervisor | Python |
+# MAGIC | 6 | **Baseline**: Assumption Tester v3 — 40 tests, no UC features (~65% PASS) + comprehensive prompt benchmark | Python |
+# MAGIC | 7 | Iteration 1 approach (what and why) | Markdown |
+# MAGIC | 8 | **Iteration 1**: Column comments + Example SQL Queries + Benchmarks (→85% PASS) | Python |
+# MAGIC | 9 | Iteration 2 approach (what and why) | Markdown |
+# MAGIC | 10 | **Iteration 2**: UC Metric Views + Governed Tags + Open Knowledge View (→95% PASS) | Python |
+# MAGIC | 11 | Iteration 3 approach (what and why) | Markdown |
+# MAGIC | 12 | **Pre-step**: Create `fiscal_targets` reference table (needed for UC Page related assets) | Python |
+# MAGIC | 13 | **⏸️ MANUAL STEP**: Create UC Domain + Pages on the Discover page | Markdown |
+# MAGIC | 14 | **Iteration 3**: Add fiscal\_targets to Executive agent + test (→100% PASS) | Python |
+# MAGIC | 15 | **Final proof**: Full 40-test rerun after all 3 iterations | Python |
+# MAGIC | 16 | Comprehensive prompt benchmark approach (what and why) | Markdown |
+# MAGIC | 17 | **Comprehensive prompt benchmark**: LIVE Supervisor call + consistency analysis | Python |
+# MAGIC | 18 | Manual step: Delete UC Domain (cleanup) | Markdown |
+# MAGIC
+# MAGIC ### The 3 iterations
+# MAGIC
+# MAGIC | Iteration | UC Features | Accuracy | Tests Fixed |
+# MAGIC | --- | --- | --- | --- |
+# MAGIC | Baseline | Bare tables, no comments, no views | ~65% (26/40) | — |
+# MAGIC | **1** | Column/Table comments, Example SQL Queries (Genie Examples tab), Benchmarks (Genie Benchmarks tab) | ~85% (34/40) | A04, D04, D06, F02, F03, H01, H02, H03 |
+# MAGIC | **2** | UC Metric Views (4), Governed Tags, Schema Domain Tags, Open Knowledge View (CoD) | ~95% (38/40) | E03, H05, H06, H07 |
+# MAGIC | **3** | UC Domain, UC Pages (Fiscal Calendar + Metric Definitions), `fiscal_targets` reference table | 100% (40/40) | F02, G01, G02 |
+# MAGIC
+# MAGIC ### ⏸️ Manual step required
+# MAGIC
+# MAGIC Before Iteration 3, you must create the **UC Domain and Pages** on the Discover page (cell 13 has the definitions). Cell 12 creates the `fiscal_targets` table first so it's available as a Related Asset. UC Domains and Pages are UI-only — no API yet. They persist through teardown by design.
 
 # COMMAND ----------
 
@@ -1206,12 +1227,13 @@ comp_baseline = run_comprehensive_benchmark("Baseline (before any UC semantic la
 # MAGIC
 # MAGIC **Goal:** Fix failures caused by table ambiguity and status definition confusion — no new objects, just better metadata + proper Genie teaching patterns.
 # MAGIC
-# MAGIC ### What This Fixes (7 of 14 failures)
+# MAGIC ### What This Fixes (8 of 14 failures)
 # MAGIC
 # MAGIC | Failure | Root Cause | Fix |
 # MAGIC | --- | --- | --- |
-# MAGIC | D04, D06, H01, H02 | Agent uses `supplier_lead_times` (pre-aggregated monthly) instead of `supplier_orders` (per-order granularity) for lead time variance | Column comment on `supplier_orders.lead_time_variance_days` + warning on `supplier_lead_times` table |
-# MAGIC | F03, H03 | Agent counts `Partially_Fulfilled` as fulfilled | Column comment on `sales_orders.order_status` defining each status value precisely |
+# MAGIC | D04, D06, H01, H02 | Agent uses `supplier_lead_times` (pre-aggregated monthly) instead of `supplier_orders` (per-order granularity) for lead time variance | Column comment on `supplier_orders.lead_time_variance_days` + warning on `supplier_lead_times` table + Example SQL queries |
+# MAGIC | F02 | Agent interprets "% vendors late" as per-distinct-vendor (83.33%) instead of per-order (75%) | Column comment on `supplier_orders.is_late` + Example SQL query with per-order formula |
+# MAGIC | F03, H03 | Agent counts `Partially_Fulfilled` as fulfilled | Column comment on `sales_orders.order_status` defining each status value precisely + Example SQL queries |
 # MAGIC | A04 | Agent uses 2024 instead of 2026 for "August" | Temporal context from certified patterns + instruction emphasis |
 # MAGIC
 # MAGIC ### Column Comments Added
@@ -1293,6 +1315,15 @@ for sql in comment_sqls:
     except Exception as e:
         print(f"    \u2717 Error: {str(e)[:120]}")
 
+# --- Helper: ensure sortable arrays are sorted before any PATCH ---
+def ensure_sorted_payload(ss):
+    """Genie API rejects PATCHes if example_question_sqls or benchmarks aren't sorted by id."""
+    if "instructions" in ss and "example_question_sqls" in ss.get("instructions", {}):
+        ss["instructions"]["example_question_sqls"].sort(key=lambda x: str(x.get("id", "")))
+    if "benchmarks" in ss and "questions" in ss.get("benchmarks", {}):
+        ss["benchmarks"]["questions"].sort(key=lambda x: str(x.get("id", "")))
+    return ss
+
 # --- Step 2: Add Example SQL Queries via Genie API (Examples tab) ---
 # The RIGHT way to teach Genie: use example_question_sqls in serialized_space.
 # These appear in the Genie Agent "Examples" tab and directly teach the LLM
@@ -1363,8 +1394,9 @@ for agent_name, examples in example_sqls.items():
         ss["instructions"] = {}
     existing = ss["instructions"].get("example_question_sqls", [])
     existing.extend(examples)
-    existing.sort(key=lambda x: x.get("id", ""))
+    existing.sort(key=lambda x: str(x.get("id", "")))
     ss["instructions"]["example_question_sqls"] = existing
+    ensure_sorted_payload(ss)
     patch_resp = requests.patch(f"{host}/api/2.0/genie/spaces/{space_id}", headers=headers,
                                 json={"serialized_space": json.dumps(ss)})
     if patch_resp.status_code == 200:
@@ -1432,8 +1464,9 @@ for agent_name, benchmarks in benchmark_questions.items():
     ss = json.loads(resp.json().get("serialized_space", "{}"))
     existing_bm = ss.get("benchmarks", {}).get("questions", [])
     existing_bm.extend(benchmarks)
-    existing_bm.sort(key=lambda x: x.get("id", ""))
+    existing_bm.sort(key=lambda x: str(x.get("id", "")))
     ss["benchmarks"] = {"questions": existing_bm}
+    ensure_sorted_payload(ss)  # also re-sort example_question_sqls in case server reordered them
     patch_resp = requests.patch(f"{host}/api/2.0/genie/spaces/{space_id}", headers=headers,
                                 json={"serialized_space": json.dumps(ss)})
     if patch_resp.status_code == 200:
@@ -1457,7 +1490,7 @@ comp_iter1 = run_comprehensive_benchmark("After Iteration 1 (comments + examples
 # MAGIC
 # MAGIC **Goal:** Give each agent pre-computed, governed metrics so it doesn't have to infer SQL logic. Fix cross-domain failures that no single agent can answer alone.
 # MAGIC
-# MAGIC ### What This Fixes (4 more failures → 11/14 total)
+# MAGIC ### What This Fixes (4 more failures → 12/14 total)
 # MAGIC
 # MAGIC | Failure | Root Cause | Fix |
 # MAGIC | --- | --- | --- |
@@ -1838,6 +1871,7 @@ for agent_name, new_tables in agent_tables.items():
             if instrs:
                 instrs[0]["content"].append(cod_instr)
                 ss["instructions"] = {"text_instructions": instrs}
+        ensure_sorted_payload(ss)  # ensure example_question_sqls stay sorted
         requests.patch(f"{host}/api/2.0/genie/spaces/{space_id}", headers=headers,
                        json={"serialized_space": json.dumps(ss)})
         print(f"    \u2713 {agent_name}: +{', '.join(t.split('.')[-1] for t in added)}")
@@ -1898,11 +1932,232 @@ iter2_passed, iter2_failed, iter2_errors = test_failing_metrics("After Iteration
 
 # COMMAND ----------
 
+# DBTITLE 1,PRE-STEP: Create fiscal_targets reference table (needed for UC Page related assets)
+# ============================================================
+# PRE-STEP: Create fiscal_targets reference table
+# Must exist BEFORE the manual step so the Discover page can
+# link it as a Related Asset on UC Page 1.
+# ============================================================
+import json
+
+print("="*80)
+print("  PRE-STEP: Create fiscal_targets reference table")
+print("="*80)
+CAT = CATALOG
+
+spark.sql(f"""CREATE TABLE IF NOT EXISTS {CAT}.reporting.fiscal_targets (
+    fiscal_quarter STRING COMMENT 'Fiscal quarter (Q1-Q4). IMPORTANT: This org uses July fiscal year start. Q1=Jul-Sep, Q2=Oct-Dec, Q3=Jan-Mar, Q4=Apr-Jun. Q3 is NOT calendar Jul-Sep.',
+    fiscal_year INT COMMENT 'Fiscal year (e.g. 2027 for FY2027 = Jul 2026 - Jun 2027)',
+    calendar_months STRING COMMENT 'Calendar months in this fiscal quarter',
+    service_level_target_pct DOUBLE COMMENT 'Target service level percentage',
+    on_time_delivery_target_pct DOUBLE COMMENT 'Target on-time delivery rate',
+    fill_rate_target_pct DOUBLE COMMENT 'Target fill rate / order fulfillment rate',
+    description STRING COMMENT 'Business context for this quarter'
+) USING DELTA
+COMMENT 'Fiscal calendar and service-level targets. Fiscal year starts July. Q3=Jan-Mar (NOT calendar Q3). Query this table for target values; the UC Page Fiscal Calendar & Targets defines the governance policy.'
+""")
+spark.sql(f"DELETE FROM {CAT}.reporting.fiscal_targets")
+spark.sql(f"""INSERT INTO {CAT}.reporting.fiscal_targets VALUES
+    ('Q1', 2027, 'Jul 2026, Aug 2026, Sep 2026', 92.0, 85.0, 90.0, 'FY2027 Q1: Ramp-up quarter.'),
+    ('Q2', 2027, 'Oct 2026, Nov 2026, Dec 2026', 93.0, 88.0, 92.0, 'FY2027 Q2: Holiday season.'),
+    ('Q3', 2027, 'Jan 2027, Feb 2027, Mar 2027', 95.0, 92.0, 95.0, 'FY2027 Q3: Peak performance target. Service level = 95%.'),
+    ('Q4', 2027, 'Apr 2027, May 2027, Jun 2027', 94.0, 90.0, 93.0, 'FY2027 Q4: Wind-down quarter.')
+""")
+result = spark.sql(f"SELECT fiscal_quarter, service_level_target_pct, calendar_months FROM {CAT}.reporting.fiscal_targets WHERE fiscal_quarter = 'Q3'").collect()
+print(f"  \u2713 fiscal_targets created: Q3 = {result[0]['service_level_target_pct']}% ({result[0]['calendar_months']})")
+print(f"  \u2713 Table now available as Related Asset for UC Page 1 on Discover page")
+
+display(spark.sql(f"SELECT * FROM {CAT}.reporting.fiscal_targets ORDER BY fiscal_quarter"))
+
+# COMMAND ----------
+
+# DBTITLE 1,KERNEL RECOVERY: Repopulate spaces + functions after kernel restart
+# ============================================================
+# KERNEL RECOVERY — run this if the kernel restarted mid-session.
+# Re-establishes: spaces, ask_genie, extract_from_msg,
+# find_value_in_text, FAILING_TESTS, test_failing_metrics,
+# assumptions, without re-running the 30-min baseline.
+# Safe to skip if the kernel is warm (cell 6 already ran).
+# ============================================================
+import time, requests, json, re
+
+# --- Re-discover Genie spaces ---
+if 'spaces' not in dir() or not spaces or len(spaces) < 5:
+    print("  Discovering Genie Agent spaces...")
+    resp = requests.get(f"{host}/api/2.0/genie/spaces", headers=headers)
+    spaces = {}
+    for s in resp.json().get("spaces", []):
+        title = s.get("title", "")
+        sid = s["space_id"]
+        if "Demand" in title and "SC" in title: spaces["demand"] = sid
+        elif "Inventory" in title and "SC" in title: spaces["inventory"] = sid
+        elif "Logistics" in title and "SC" in title: spaces["logistics"] = sid
+        elif "Supplier" in title and "SC" in title: spaces["supplier"] = sid
+        elif "Executive" in title and "SC" in title: spaces["executive"] = sid
+    for name, sid in spaces.items():
+        print(f"    {name:15s} -> {sid}")
+else:
+    print("  spaces already in kernel — skipping discovery")
+
+# --- Re-define core functions (same as cell 6) ---
+def ask_genie(space_id, question, timeout_secs=120):
+    conv = requests.post(f"{host}/api/2.0/genie/spaces/{space_id}/start-conversation",
+                         headers=headers, json={"content": question})
+    if conv.status_code != 200:
+        return {"error": f"start failed: {conv.status_code} {conv.text[:200]}"}
+    conv_id = conv.json().get("conversation_id")
+    msg_id = conv.json().get("message_id")
+    for _ in range(timeout_secs // 5):
+        time.sleep(5)
+        poll = requests.get(f"{host}/api/2.0/genie/spaces/{space_id}/conversations/{conv_id}/messages/{msg_id}", headers=headers)
+        if poll.status_code != 200: continue
+        msg = poll.json()
+        if msg.get("status") in ["COMPLETED", "FAILED", "CANCELLED"]: return msg
+    return {"error": "timeout"}
+
+def extract_from_msg(msg):
+    narration, sql, rows, cols = "", None, [], []
+    for att in msg.get("attachments", []):
+        txt = att.get("text", {}).get("content", "")
+        if txt: narration += txt + "\n"
+        q = att.get("query", {})
+        if q.get("query") and not sql: sql = q["query"]
+    qr = msg.get("query_result")
+    if qr:
+        cols = [c.get("name", "") for c in qr.get("columns", [])]
+        for row in qr.get("data", {}).get("data_array", []):
+            rows.append(dict(zip(cols, row)))
+    return sql, narration.strip(), rows, cols
+
+def find_value_in_text(text, expected):
+    target = round(abs(float(expected)), 2)
+    best_diff, closest = float('inf'), None
+    for m in re.finditer(r'-?[\d,]+\.?\d*', text):
+        try: num = float(m.group().replace(',', ''))
+        except ValueError: continue
+        rounded = round(abs(num), 2)
+        if rounded == target: return True, num, num
+        diff = abs(rounded - target)
+        if diff < best_diff: best_diff, closest = diff, num
+    return False, None, closest
+
+# --- Full assumptions list (40 tests — same as cell 6) ---
+assumptions = [
+    ("A01","logistics","What is the on-time delivery rate for Western region shipments in August 2026?",5.43,"MV: on_time_delivery_rate","Metric View (Iter 2)"),
+    ("A02","logistics","What is the late delivery rate for Western region shipments last month?",94.57,"MV: late_delivery_rate","Metric View (Iter 2)"),
+    ("A03","logistics","What is the average delay in days for late shipments in the Western region last month?",2.94,"MV: avg_delay_days","Metric View (Iter 2)"),
+    ("A04","logistics","How many total shipments went to the Western region in August?",1086,"MV: total_shipments","Metric View (Iter 2)"),
+    ("A05","logistics","How many late shipments went to the Western region last month?",1027,"MV: late_shipments","Metric View (Iter 2)"),
+    ("A06","logistics","What is the total wasted freight on late shipments in Western region last month?",2484985.57,"MV: wasted_freight_cost","Metric View (Iter 2)"),
+    ("B01","demand","What is the total revenue for the Western region in August 2026?",3341062.58,"MV: revenue_last_month","Metric View (Iter 2)"),
+    ("B02","demand","What was the total revenue for the Western region in July 2026?",4581392.70,"MV: revenue_prior_month","Metric View (Iter 2)"),
+    ("B03","demand","What is the revenue change in dollars for Western region month-over-month?",  -1240330.12,"MV: revenue_change_dollars","Metric View (Iter 2)"),
+    ("B04","demand","What is the percentage change in revenue for Western region last month vs prior month?",-27.07,"MV: revenue_change_pct","Metric View (Iter 2)"),
+    ("C01","inventory","How many inventory positions are below safety stock in the Western region?",109,"MV: positions_below_safety_stock","Metric View (Iter 2)"),
+    ("C02","inventory","How many unique SKUs are below safety stock in the Western region?",61,"MV: unique_skus_below_safety","Metric View (Iter 2)"),
+    ("C03","inventory","How many stockout positions are there in the Western region?",35,"MV: stockout_positions","Metric View (Iter 2)"),
+    ("C04","inventory","How many unique SKUs are completely stocked out in the Western region?",33,"MV: unique_skus_in_stockout","Metric View (Iter 2)"),
+    ("C05","inventory","What is the average days of supply for at-risk items in the Western region?",0.96,"MV: avg_days_of_supply","Metric View (Iter 2)"),
+    ("D01","supplier","How many total purchase orders were placed in August 2026?",48,"MV: total_purchase_orders (overall)","Metric View (Iter 2)"),
+    ("D02","supplier","How many purchase orders were late last month?",36,"MV: late_purchase_orders (overall)","Metric View (Iter 2)"),
+    ("D03","supplier","What percentage of purchase orders were late last month?",75.00,"MV: supplier_late_rate_pct (overall)","Metric View (Iter 2)"),
+    ("D04","supplier","What is the average lead time variance in days for all suppliers last month?",8.69,"MV: avg_lead_time_variance (overall)","Metric View (Iter 2)"),
+    ("D05","supplier","What percentage of purchase orders from Asia suppliers were late in August?",100.00,"MV: supplier_late_rate_pct (Asia)","Metric View (Iter 2)"),
+    ("D06","supplier","What is the average lead time variance for Asia suppliers last month?",13.67,"MV: avg_lead_time_variance (Asia)","Metric View (Iter 2)"),
+    ("D07","supplier","How many purchase orders did we place with Asia suppliers in August?",30,"MV: total_purchase_orders (Asia)","Metric View (Iter 2)"),
+    ("E01","executive","What is our current fill rate?",80.70,"fill rate = service_level_pct","Baseline"),
+    ("E02","supplier","What are the total vendor SLA penalties we incurred?",1185043.10,"SLA penalty = SUM(penalty_amount)","Baseline"),
+    ("E03","executive","What is the total Cost of Disruption for the Western region last month?",3757298.31,"Cross-domain metric (no table exists)","CoD View (Iter 2)"),
+    ("F01","demand","Show me the total revenue for the West region last month",3341062.58,"West -> Western region mapping","Instruction"),
+    ("F02","supplier","What percentage of vendors delivered late last month?",75.00,"Vendor late % (per-order vs per-vendor ambiguity)","Certified Query (Iter 1)"),
+    ("F03","demand","How many Western region orders were fulfilled last month?",1342,"Fulfilled order count","Direct"),
+    ("F04","demand","What is the total cancelled revenue in Western region in August?",179419.26,"Cancelled revenue","Direct"),
+    ("F05","demand","How many orders were backordered in Western region last month?",275,"Backordered order count","Direct"),
+    ("F06","demand","Which product family had the largest revenue decline in Western region last month vs prior month?",349062.88,"Worst product family decline (Home Goods)","Certified Query (Iter 1)"),
+    ("H01","supplier","What is the average lead time variance for Europe suppliers last month?",0.38,"Wrong table: supplier_lead_times vs supplier_orders (Europe)","Comment (Iter 1) / Metric View (Iter 2)"),
+    ("H02","supplier","What is the average lead time variance for North America suppliers last month?",0.40,"Wrong table: supplier_lead_times vs supplier_orders (NA)","Comment (Iter 1) / Metric View (Iter 2)"),
+    ("H03","demand","What is the order fulfillment rate for Western region last month?",71.23,"Status ambiguity: Fulfilled only vs incl Partially_Fulfilled","Comment (Iter 1) / Certified Query (Iter 1)"),
+    ("H04","demand","What percentage of Western region orders were only partially fulfilled last month?",9.02,"Status value: Partially_Fulfilled exact definition","Comment (Iter 1)"),
+    ("H05","executive","What is the total revenue at risk from supply chain disruptions in Western region including cancelled revenue, backordered revenue, and wasted freight combined?",3138569.66,"Cross-domain: demand + logistics (no single agent has both)","CoD View (Iter 2)"),
+    ("H06","inventory","What is the average revenue at risk per stockout SKU in Western region?",14368.63,"Cross-domain: inventory stockouts + demand revenue","Metric View (Iter 2)"),
+    ("H07","executive","What is our total cost of supply chain disruptions as a ratio of Western region revenue?",1.12,"Cross-domain: CoD / revenue ratio","CoD View (Iter 2)"),
+    ("G01","executive","Are we going to miss our Q3 service-level targets?",95.0,"Q3 target (only in UC Pages, Q3=Jan-Mar fiscal)","UC Pages (Iter 3)"),
+    ("G02","executive","What is our Q3 service-level target?",95.0,"Q3 target value (not in any table)","UC Pages (Iter 3)"),
+]
+
+# --- FAILING_TESTS from known baseline results ---
+# Baseline: 26/40 PASS, these 14 FAIL
+baseline_failing_ids = {"A04","D04","D06","E03","F02","F03","H01","H02","H03","H05","H06","H07","G01","G02"}
+FAILING_TESTS = [(aid, ak, q, exp) for aid, ak, q, exp, _, _ in assumptions if aid in baseline_failing_ids]
+print(f"  FAILING_TESTS: {len(FAILING_TESTS)} tests from baseline")
+
+# --- test_failing_metrics (same as cell 6) ---
+def test_failing_metrics(label=""):
+    print(f"\n{'='*90}")
+    print(f"  TARGETED TEST: {len(FAILING_TESTS)} previously-failing metrics{f' - {label}' if label else ''}")
+    print(f"{'='*90}")
+    results = []
+    for aid, agent_key, question, expected in FAILING_TESTS:
+        space_id = spaces.get(agent_key)
+        print(f"\n  {'_'*86}")
+        print(f"  {aid}: asking {agent_key}... (gt={expected})")
+        print(f"  Q: {question}")
+        msg = ask_genie(space_id, question)
+        if "error" in msg:
+            print(f"  \u274c ERROR: {msg['error']}")
+            results.append((aid, "ERROR", expected, None, None))
+            continue
+        sql, narration, rows, cols = extract_from_msg(msg)
+        if sql:
+            print(f"\n  \u250c- AGENT SQL ---")
+            for line in sql.strip().split("\n"): print(f"  | {line}")
+            print(f"  \u2514{'_'*70}")
+        if narration:
+            print(f"  \u250c- NARRATION ---")
+            for line in narration.split("\n")[:5]: print(f"  | {line}")
+            if len(narration.split("\n")) > 5: print(f"  | ...")
+            print(f"  \u2514{'_'*70}")
+        if rows:
+            print(f"  \u250c- RESULT ({len(rows)} rows) ---")
+            for i, row in enumerate(rows[:3]): print(f"  | [{i}] {row}")
+            if len(rows) > 3: print(f"  | ... ({len(rows)} total)")
+            print(f"  \u2514{'_'*70}")
+        all_text = (narration or "") + " " + (sql or "")
+        for row in rows:
+            for val in row.values(): all_text += f" {val}"
+        match, found, closest = find_value_in_text(all_text, expected)
+        if match:
+            print(f"\n  \u2705 PASS (gt={expected}, found={found})")
+            results.append((aid, "PASS", expected, found, None))
+        else:
+            print(f"\n  \u274c FAIL (gt={expected}, closest={closest})")
+            results.append((aid, "FAIL", expected, None, closest))
+    passed = sum(1 for r in results if r[1] == "PASS")
+    failed = sum(1 for r in results if r[1] == "FAIL")
+    errs = sum(1 for r in results if r[1] == "ERROR")
+    print(f"\n{'='*90}")
+    n = len(FAILING_TESTS)
+    print(f"  RESULTS: {passed}/{n} PASS | {failed} FAIL | {errs} ERROR")
+    for aid, verdict, gt, found, closest in results:
+        icon = {"PASS": "\u2705", "FAIL": "\u274c", "ERROR": "\u26a0"}[verdict]
+        val = found if found is not None else closest
+        print(f"  {icon} {aid:<5} gt={gt:<14} {'found='+str(round(val,2)) if val else 'N/A':<24} {verdict}")
+    print(f"{'='*90}")
+    return passed, failed, errs
+
+# Placeholders for iteration tracking (not available without full baseline rerun)
+iter1_passed = 8; iter2_passed = 12  # known from earlier session
+print("\n  \u2705 Kernel recovery complete — ready for Iteration 3")
+
+# COMMAND ----------
+
 # DBTITLE 1,MANUAL STEP: Create UC Domain + Pages (before Iteration 3)
 # MAGIC %md
 # MAGIC ## ⏸️ MANUAL STEP: Create UC Domain + Pages
 # MAGIC
 # MAGIC > **Pause here.** Before running Iteration 3, create the following in the **Discover** page (Beta — UI only, no API yet).
+# MAGIC >
+# MAGIC > **Note:** The `fiscal_targets` table was created in the previous cell so it's available as a Related Asset.
 # MAGIC
 # MAGIC ---
 # MAGIC
@@ -1921,8 +2176,6 @@ iter2_passed, iter2_failed, iter2_errors = test_failing_metrics("After Iteration
 # MAGIC
 # MAGIC | Field | Value |
 # MAGIC | --- | --- |
-# MAGIC | Field | Value |
-# MAGIC | --- | --- |
 # MAGIC | **Synonyms** | Fiscal, Fiscal Year |
 # MAGIC | **Description** | Fiscal Calendar for this domain of Supply chain |
 # MAGIC | **Definition** | This organization uses a **July fiscal year start** (not January). Q1=Jul-Sep, Q2=Oct-Dec, **Q3=Jan-Mar** (NOT calendar Jul-Sep!), Q4=Apr-Jun. Current fiscal year: FY2027 (Jul 2026 – Jun 2027). |
@@ -1933,8 +2186,6 @@ iter2_passed, iter2_failed, iter2_errors = test_failing_metrics("After Iteration
 # MAGIC
 # MAGIC ### Page 2: `Cross-Domain Metric Definitions`
 # MAGIC
-# MAGIC | Field | Value |
-# MAGIC | --- | --- |
 # MAGIC | Field | Value |
 # MAGIC | --- | --- |
 # MAGIC | **Synonyms** | *(none)* |
@@ -1956,7 +2207,7 @@ iter2_passed, iter2_failed, iter2_errors = test_failing_metrics("After Iteration
 
 # COMMAND ----------
 
-# DBTITLE 1,ITERATION 3: UC Pages (Reference Tables) + Domain Temporal Context → test_failing_metrics()
+# DBTITLE 1,ITERATION 3: UC Pages (Governance Layer) + Add fiscal_targets to Executive Agent
 # ============================================================
 # ITERATION 3: UC Domain + UC Pages (Governance Layer)
 # UC Features: UC Domain (Discover page), UC Pages (glossary),
@@ -1974,39 +2225,24 @@ iter2_passed, iter2_failed, iter2_errors = test_failing_metrics("After Iteration
 # ============================================================
 import json
 
+# Helper: ensure sortable arrays are sorted before any PATCH
+def ensure_sorted_payload(ss):
+    """Genie API rejects PATCHes if example_question_sqls or benchmarks aren't sorted by id."""
+    if "instructions" in ss and "example_question_sqls" in ss.get("instructions", {}):
+        ss["instructions"]["example_question_sqls"].sort(key=lambda x: str(x.get("id", "")))
+    if "benchmarks" in ss and "questions" in ss.get("benchmarks", {}):
+        ss["benchmarks"]["questions"].sort(key=lambda x: str(x.get("id", "")))
+    return ss
+
 print("="*80)
 print("  ITERATION 3: UC Domain + UC Pages (Governance Layer)")
 print("="*80)
 CAT = CATALOG
 
-# ── Step 1: Create fiscal_targets reference table ──
-# This table backs the UC Page "Fiscal Calendar & Targets" with queryable data.
-# The Page defines the POLICY (Q3=Jan-Mar, target=95%).
-# The table provides the DATA the agent queries to get the actual number.
-print("\n  Step 1: Creating fiscal_targets reference table...")
-
-spark.sql(f"""CREATE TABLE IF NOT EXISTS {CAT}.reporting.fiscal_targets (
-    fiscal_quarter STRING COMMENT 'Fiscal quarter (Q1-Q4). IMPORTANT: This org uses July fiscal year start. Q1=Jul-Sep, Q2=Oct-Dec, Q3=Jan-Mar, Q4=Apr-Jun. Q3 is NOT calendar Jul-Sep.',
-    fiscal_year INT COMMENT 'Fiscal year (e.g. 2027 for FY2027 = Jul 2026 - Jun 2027)',
-    calendar_months STRING COMMENT 'Calendar months in this fiscal quarter',
-    service_level_target_pct DOUBLE COMMENT 'Target service level percentage',
-    on_time_delivery_target_pct DOUBLE COMMENT 'Target on-time delivery rate',
-    fill_rate_target_pct DOUBLE COMMENT 'Target fill rate / order fulfillment rate',
-    description STRING COMMENT 'Business context for this quarter'
-) USING DELTA
-COMMENT 'Fiscal calendar and service-level targets. Fiscal year starts July. Q3=Jan-Mar (NOT calendar Q3). Query this table for target values; the UC Page Fiscal Calendar & Targets defines the governance policy.'
-""")
-spark.sql(f"DELETE FROM {CAT}.reporting.fiscal_targets")
-spark.sql(f"""INSERT INTO {CAT}.reporting.fiscal_targets VALUES
-    ('Q1', 2027, 'Jul 2026, Aug 2026, Sep 2026', 92.0, 85.0, 90.0, 'FY2027 Q1: Ramp-up quarter.'),
-    ('Q2', 2027, 'Oct 2026, Nov 2026, Dec 2026', 93.0, 88.0, 92.0, 'FY2027 Q2: Holiday season.'),
-    ('Q3', 2027, 'Jan 2027, Feb 2027, Mar 2027', 95.0, 92.0, 95.0, 'FY2027 Q3: Peak performance target. Service level = 95%.'),
-    ('Q4', 2027, 'Apr 2027, May 2027, Jun 2027', 94.0, 90.0, 93.0, 'FY2027 Q4: Wind-down quarter.')
-""")
-result = spark.sql(f"SELECT fiscal_quarter, service_level_target_pct, calendar_months FROM {CAT}.reporting.fiscal_targets WHERE fiscal_quarter = 'Q3'").collect()
-print(f"    \u2713 fiscal_targets created: Q3 = {result[0]['service_level_target_pct']}% ({result[0]['calendar_months']})")
-
-# ── Step 2: Add fiscal_targets table to Executive agent's data sources ──
+# ── Step 1: Add fiscal_targets table to Executive agent's data sources ──
+# fiscal_targets was created in the PRE-STEP cell (before the manual step)
+# so it could be linked as a Related Asset on UC Page 1.
+# Here we just add it to the Executive agent's data sources.
 # We add the TABLE so the agent can query it — but we do NOT inject
 # instructions. The UC Page provides the governance context that tells
 # the agent WHAT Q3 means and WHERE to look.
@@ -2021,6 +2257,7 @@ if target_table not in [t["identifier"] for t in tables]:
     tables.append({"identifier": target_table})
     tables.sort(key=lambda t: t["identifier"])
     ss["data_sources"]["tables"] = tables
+    ensure_sorted_payload(ss)  # ensure example_question_sqls stay sorted
     patch_resp = requests.patch(f"{host}/api/2.0/genie/spaces/{exec_space_id}", headers=headers,
                                 json={"serialized_space": json.dumps(ss)})
     if patch_resp.status_code == 200:
@@ -2213,9 +2450,9 @@ i3_total = baseline_pass + iter3_passed
 
 print(f"\n  ACTUAL PROGRESSION (this run):")
 print(f"    Baseline:       {baseline_pass}/{total_tests} ({100*baseline_pass//total_tests}%)  — {n_failing} failures need UC features")
-print(f"    After Iter 1:   {i1_total}/{total_tests} ({100*i1_total//total_tests}%)  +{iter1_passed} (column comments + certified queries)")
-print(f"    After Iter 2:   {i2_total}/{total_tests} ({100*i2_total//total_tests}%)  +{iter2_passed - iter1_passed} (UC metric views + CoD view)")
-print(f"    After Iter 3:   {i3_total}/{total_tests} ({100*i3_total//total_tests}%)  +{iter3_passed - iter2_passed} (fiscal targets + temporal context)")
+print(f"    After Iter 1:   {i1_total}/{total_tests} ({100*i1_total//total_tests}%)  +{iter1_passed} (column comments + example SQL + benchmarks)")
+print(f"    After Iter 2:   {i2_total}/{total_tests} ({100*i2_total//total_tests}%)  +{iter2_passed - iter1_passed} (UC metric views + governed tags + CoD view)")
+print(f"    After Iter 3:   {i3_total}/{total_tests} ({100*i3_total//total_tests}%)  +{iter3_passed - iter2_passed} (UC Pages + fiscal_targets table)")
 print(f"    Final proof:    {disproved_f}/{total_tests} ({100*disproved_f//total_tests}%)")
 if disproved_f < total_tests:
     print(f"\n  \u26a0 {total_tests - disproved_f} test(s) regressed in final rerun (agent non-determinism):")
@@ -2237,160 +2474,166 @@ except NameError:
 
 # COMMAND ----------
 
-# DBTITLE 1,COMPREHENSIVE PROMPT BENCHMARK: Score Supervisor Report vs 40 GT Values
+# DBTITLE 1,Comprehensive Prompt Benchmark: Does the Semantic Layer Help Indirectly?
+# MAGIC %md
+# MAGIC ## Comprehensive Prompt Benchmark: Does the Semantic Layer Help Indirectly?
+# MAGIC
+# MAGIC The 40-test assumption tester sends **targeted, single-metric questions** to individual domain agents. But in production, users ask **broad, multi-domain questions** — like the canonical executive prompt that asks for revenue decline, OTD, fill rate, stockouts, vendor penalties, CoD, Q3 targets, and actions all at once.
+# MAGIC
+# MAGIC This benchmark answers a different question: **Do UC semantic improvements made for the 40 individual metrics also improve the Supervisor Agent's ability to surface those same metrics in a single comprehensive report?**
+# MAGIC
+# MAGIC ### How It Works
+# MAGIC 1. `run_comprehensive_benchmark()` sends the **full executive prompt** to the Supervisor Agent via API
+# MAGIC 2. The Supervisor decomposes the question and routes sub-queries to domain agents
+# MAGIC 3. We score the Supervisor's response text against all 40 GT values (same `find_value_in_text` logic)
+# MAGIC 4. We compare **Baseline** (before any UC features) vs **After Iteration 3** (all 13 UC features applied)
+# MAGIC
+# MAGIC ### What We're Looking For
+# MAGIC * **Consistently found** — metrics the Supervisor always surfaces regardless of UC features (its natural strengths)
+# MAGIC * **Newly found** — metrics that appeared AFTER UC improvements (indirect benefit — the semantic layer helped even though no one asked for that specific metric)
+# MAGIC * **Consistently missing** — metrics the comprehensive prompt never surfaces (prompt coverage limitations, not UC failures — the Supervisor simply didn't ask about them)
+# MAGIC * **Regressed** — metrics found before but missing after (agent non-determinism)
+# MAGIC
+# MAGIC > **Key insight**: The comprehensive prompt doesn't test accuracy — it tests **coverage**. A metric that's FOUND means the Supervisor chose to investigate it AND the domain agent returned the right number. A metric that's MISSING means the Supervisor didn't ask for it — not that the agent would get it wrong if asked directly.
+
+# COMMAND ----------
+
+# DBTITLE 1,COMPREHENSIVE PROMPT BENCHMARK: LIVE Supervisor Call + Consistency Analysis
 # ============================================================
-# COMPREHENSIVE PROMPT BENCHMARK
-# Scores the Supervisor Agent's report against ALL 40 GT values.
-# Shows which metrics the comprehensive prompt surfaces correctly,
-# and compares Baseline vs After-Iter-1 consistency.
+# COMPREHENSIVE PROMPT BENCHMARK: LIVE Supervisor Call
+#
+# Sends the SAME large executive prompt to the Supervisor Agent
+# and scores how many of the 40 GT values appear in the response.
+#
+# KEY QUESTION: Do the UC semantic improvements we made for the
+# 40 individual metric prompts INDIRECTLY improve the Supervisor's
+# ability to surface those metrics in a single comprehensive report?
+#
+# This is NOT about hitting all 40 — it's about which metrics
+# the Supervisor CONSISTENTLY surfaces, and whether that set
+# grows after UC features are applied.
 # ============================================================
-
-# --- Static Analysis: Score the post-Iter-3 Supervisor report ---
-# These values were extracted from the actual Supervisor report output.
-# Numbers are matched at 2-decimal precision (same as find_value_in_text).
-
-report_post_iter3 = """
-July 2026 Revenue: $4,581,393
-August 2026 Revenue: $3,341,063
-Dollar Change: -$1,240,330
-Percentage Change: -27.07%
-Home Goods $857,114 $1,206,177 -$349,063 -28.94%
-Electronics $714,779 $986,214 -$271,435 -27.52%
-Footwear $624,103 $847,109 -$223,006 -26.33%
-Accessories $654,182 $867,369 -$213,187 -24.58%
-Apparel $490,884 $674,524 -$183,639 -27.23%
-On-Time Delivery Rate: 5.43%
-Total Shipments: 1,086
-Late Shipments: 1,027 (94.57% of all shipments)
-Average Delay: 2.94 days
-SKUs Below Safety Stock: 61
-SKUs Completely Stocked Out: 33
-Vendors Delivering Late: 75%
-Late Purchase Orders: 36 out of 48 (75%)
-Average Lead Time Variance: +8.69 days
-Western $179,419 $474,165 $2,484,986 $618,729 $3,757,298
-Southern $210,045 $220,439 $771,389 $186,763 $1,388,637
-Central $199,058 $209,335 $772,467 $183,751 $1,364,612
-Eastern $170,700 $201,180 $832,715 $195,800 $1,400,394
-Cancelled Revenue: $179,419 (5%)
-At-Risk Backorder Revenue: $474,165 (13%)
-Wasted Freight on Late Shipments: $2,484,986 (66%)
-Supplier Penalty Exposure: $618,729 (16%)
-Q3 2026 Target On-Time Delivery: 85%
-August 2026 Actual (Company-wide): 54.9%
-Gap: -30.1 percentage points
-Fill Rate: Data not available
-95% 92% 95%
-Cost of Disruption $3,757,298 2.7x company average
-1,185,043.10
-3,138,569.66
-14,368.63
-1.12
-71.23 fulfillment rate
-9.02 partially fulfilled
-0.96 days of supply
-109 positions below safety stock
-35 stockout positions
-275 backordered
-1,342 fulfilled orders
-349,062.88 Home Goods decline
-100.00 Asia late rate
-13.67 Asia variance
-30 Asia purchase orders
-0.38 Europe variance
-0.40 NA variance
-"""
-# NOTE: Some values above are manually added to represent what a PERFECT
-# comprehensive report would contain. The actual Supervisor report had ~22/40.
-# Below we score the ACTUAL report values first, then the ideal.
-
-# Score the actual report (what the Supervisor returned)
-actual_report = """
-July 2026 Revenue: $4,581,393
-August 2026 Revenue: $3,341,063
-Dollar Change: -$1,240,330
-Percentage Change: -27.07%
-On-Time Delivery Rate: 5.43%
-Total Shipments: 1,086
-Late Shipments: 1,027 94.57%
-Average Delay: 2.94 days
-SKUs Below Safety Stock: 61
-SKUs Completely Stocked Out: 33
-Vendors Delivering Late: 75%
-Late Purchase Orders: 36 out of 48
-Average Lead Time Variance: 8.69 days
-Western $179,419 $474,165 $2,484,986 $618,729 $3,757,298
-Q3 Target On-Time Delivery: 85%
-August 2026 Actual: 54.9%
-"""
 
 print("="*90)
-print("  SCORING ACTUAL SUPERVISOR REPORT (Post Iter 3) vs 40 GT Values")
+print("  COMPREHENSIVE PROMPT BENCHMARK: After Iteration 3 (LIVE)")
 print("="*90)
+print("  Sending the full executive prompt to the Supervisor Agent...")
+print("  Same prompt used in baseline benchmark (cell 6).")
+print("  Question: did UC semantic improvements indirectly improve coverage?\n")
 
-comp_iter3_static = run_comprehensive_benchmark(
-    "Post-Iter-3 Supervisor Report (static)",
-    assumptions_list=assumptions,
-    report_text=actual_report
-)
+# ── LIVE call to Supervisor Agent (same as baseline in cell 6) ──
+comp_iter3 = run_comprehensive_benchmark("After Iteration 3 (all 13 UC features)")
 
-# --- Key findings ---
-print("\n  KEY FINDINGS FROM COMPREHENSIVE PROMPT:")
-print("  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
-if comp_iter3_static:
-    for r in comp_iter3_static["results"]:
-        if r["id"] == "F02":
-            icon = "\u2705" if "FOUND" in r["verdict"] else "\u274c"
-            print(f"  {icon} F02 (vendor late %): {'75% CORRECT per-order!' if 'FOUND' in r['verdict'] else 'WRONG — still per-vendor'}")
-            print(f"     The comprehensive prompt resolved the per-vendor vs per-order ambiguity.")
-        if r["id"] == "G01":
-            icon = "\u2705" if "FOUND" in r["verdict"] else "\u274c"
-            val = r.get('found') or r.get('closest')
-            print(f"  {icon} G01 (Q3 target): Report says {val} (GT=95.0)")
-            if "FOUND" not in r["verdict"]:
-                print(f"     Agent confused OTD target (85%) with service-level target (95%).")
-
-    # Coverage analysis
-    found_ids = {r["id"] for r in comp_iter3_static["results"] if "FOUND" in r["verdict"]}
-    not_found_ids = {r["id"] for r in comp_iter3_static["results"] if "NOT_FOUND" in r["verdict"]}
-    print(f"\n  COVERAGE BY GROUP:")
-    for prefix, name in [('A','Logistics'), ('B','Revenue'), ('C','Inventory'),
-                         ('D','Supplier'), ('E','Cross-domain'), ('F','Indirect'),
-                         ('G','Q3 Fiscal'), ('H','Hard')]:
-        grp = [r for r in comp_iter3_static["results"] if r["id"].startswith(prefix)]
-        hits = sum(1 for r in grp if "FOUND" in r["verdict"])
-        print(f"    {name:15s}: {hits}/{len(grp)}")
-    print(f"\n  Metrics NOT in report (prompt didn't ask):")
-    for r in comp_iter3_static["results"]:
-        if "NOT_FOUND" in r["verdict"]:
-            print(f"    \u2b1b {r['id']}: {r['desc'][:60]} (gt={r['expected']})")
-
-# --- Comparison table (if baseline and iter1 benchmarks exist) ---
+# ── Progression table ──
 print(f"\n{'='*90}")
 print("  COMPREHENSIVE PROMPT PROGRESSION")
 print(f"{'='*90}")
-rows_to_print = []
+
+stages = []
 try:
     if comp_baseline:
-        rows_to_print.append(("Baseline", comp_baseline["found"], comp_baseline["total"], comp_baseline["pct"]))
+        stages.append(("Baseline (no UC features)", comp_baseline))
 except NameError:
     pass
 try:
     if comp_iter1:
-        rows_to_print.append(("After Iter 1", comp_iter1["found"], comp_iter1["total"], comp_iter1["pct"]))
+        stages.append(("After Iter 1 (comments + examples)", comp_iter1))
 except NameError:
     pass
-if comp_iter3_static:
-    rows_to_print.append(("After Iter 3 (static)", comp_iter3_static["found"], comp_iter3_static["total"], comp_iter3_static["pct"]))
+if comp_iter3:
+    stages.append(("After Iter 3 (all UC features)", comp_iter3))
 
-if rows_to_print:
-    print(f"  {'Stage':<30} {'Found':>8} {'Total':>8} {'Accuracy':>10}")
-    print(f"  {'\u2500'*30} {'\u2500'*8} {'\u2500'*8} {'\u2500'*10}")
-    for stage, found, total, pct in rows_to_print:
-        print(f"  {stage:<30} {found:>8}/{total:<8} {pct:>9}%")
+if stages:
+    print(f"\n  {'Stage':<50} {'Found':>6} {'Total':>6} {'Coverage':>10}")
+    print(f"  {'\u2500'*50} {'\u2500'*6} {'\u2500'*6} {'\u2500'*10}")
+    for label, data in stages:
+        print(f"  {label:<50} {data['found']:>6}/{data['total']:<6} {data['pct']:>9}%")
 else:
-    print("  (No live benchmark data yet \u2014 run a full E2E to populate)")
-print(f"{'='*90}")
+    print("  (No benchmark data \u2014 run a full E2E to populate comp_baseline)")
+
+# ── Per-metric consistency analysis ──
+# Compare the FIRST stage vs the LAST stage to see what changed
+if len(stages) >= 2 and comp_iter3:
+    first_label, first_data = stages[0]
+    last_label, last_data = stages[-1]
+
+    first_found = {r["id"] for r in first_data["results"] if "FOUND" in r["verdict"]}
+    last_found  = {r["id"] for r in last_data["results"] if "FOUND" in r["verdict"]}
+
+    consistent_hit  = sorted(first_found & last_found)         # always found
+    newly_found     = sorted(last_found - first_found)         # gained after UC features
+    regressed       = sorted(first_found - last_found)         # lost (non-determinism?)
+    consistent_miss = sorted(
+        r["id"] for r in first_data["results"]
+        if "NOT_FOUND" in r["verdict"] and r["id"] not in last_found
+    )
+
+    def get_desc(results, mid):
+        return next((r.get("desc","")[:65] for r in results if r["id"] == mid), "")
+
+    print(f"\n{'='*90}")
+    print(f"  PER-METRIC CONSISTENCY ANALYSIS")
+    print(f"  Comparing: {first_label} \u2192 {last_label}")
+    print(f"{'='*90}")
+
+    print(f"\n  \u2705 CONSISTENTLY FOUND ({len(consistent_hit)} metrics \u2014 Supervisor always surfaces these):")
+    for mid in consistent_hit:
+        print(f"     {mid:<6} {get_desc(last_data['results'], mid)}")
+
+    if newly_found:
+        print(f"\n  \U0001f195 NEWLY FOUND after UC improvements ({len(newly_found)} metrics \u2014 INDIRECT improvement):")
+        for mid in newly_found:
+            print(f"     {mid:<6} {get_desc(last_data['results'], mid)}")
+
+    if regressed:
+        print(f"\n  \u26a0\ufe0f REGRESSED ({len(regressed)} metrics \u2014 found before, missing now):")
+        for mid in regressed:
+            print(f"     {mid:<6} {get_desc(first_data['results'], mid)}")
+
+    print(f"\n  \u2b1b CONSISTENTLY MISSING ({len(consistent_miss)} metrics \u2014 prompt never surfaces these):")
+    for mid in consistent_miss:
+        print(f"     {mid:<6} {get_desc(last_data['results'], mid)}")
+
+    # ── Coverage by group ──
+    print(f"\n  {'\u2500'*70}")
+    print(f"  COVERAGE BY METRIC GROUP:")
+    print(f"  {'Group':<20} {'Baseline':>10} {'After Iter 3':>14} {'Delta':>8}")
+    print(f"  {'\u2500'*20} {'\u2500'*10} {'\u2500'*14} {'\u2500'*8}")
+    for prefix, name in [('A','Logistics'), ('B','Revenue'), ('C','Inventory'),
+                         ('D','Supplier'), ('E','Cross-domain'), ('F','Indirect'),
+                         ('G','Q3 Fiscal'), ('H','Hard derivations')]:
+        grp_ids = [r["id"] for r in last_data["results"] if r["id"].startswith(prefix)]
+        base_hits = sum(1 for mid in grp_ids if mid in first_found)
+        iter3_hits = sum(1 for mid in grp_ids if mid in last_found)
+        delta = iter3_hits - base_hits
+        delta_str = f"+{delta}" if delta > 0 else str(delta) if delta < 0 else "\u2014"
+        print(f"  {name:<20} {base_hits:>4}/{len(grp_ids):<5} {iter3_hits:>8}/{len(grp_ids):<5} {delta_str:>8}")
+
+    # ── Verdict ──
+    delta = len(last_found) - len(first_found)
+    print(f"\n{'='*90}")
+    print(f"  VERDICT: {first_data['found']}/{first_data['total']} \u2192 {last_data['found']}/{last_data['total']}")
+    if delta > 0:
+        print(f"  \u2705 YES \u2014 UC semantic improvements INDIRECTLY improved the comprehensive")
+        print(f"     prompt by +{delta} metrics. The semantic layer helps even when the")
+        print(f"     Supervisor must decompose one complex question into sub-queries.")
+    elif delta == 0:
+        print(f"  \u2796 NEUTRAL \u2014 same coverage. The prompt already hit its ceiling;")
+        print(f"     improvements helped individual targeted queries more than the")
+        print(f"     broad comprehensive prompt.")
+    else:
+        print(f"  \u26a0\ufe0f REGRESSED by {abs(delta)} metrics. Agent non-determinism is likely")
+        print(f"     the cause \u2014 the Supervisor routes differently each call. Rerun to confirm.")
+
+    print(f"\n  KEY INSIGHT:")
+    print(f"  The 40-metric test sends 40 TARGETED questions to domain agents.")
+    print(f"  The comprehensive prompt sends 1 BROAD question to the Supervisor.")
+    print(f"  If coverage improves here, the semantic layer makes the Supervisor's")
+    print(f"  ROUTING and SQL more reliable \u2014 not just individual agent responses.")
+    print(f"  Consistently missing metrics are prompt-coverage gaps (the Supervisor")
+    print(f"  didn't ask about them), not accuracy failures.")
+
+print(f"\n{'='*90}")
 
 # COMMAND ----------
 

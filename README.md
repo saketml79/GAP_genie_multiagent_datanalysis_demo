@@ -160,6 +160,45 @@ The practical rule: **build one domain at a time, one layer at a time.** This wo
 
 > **Note on images**: The two reference images above are from [Databricks UC Semantics documentation](https://docs.databricks.com/en/uc-semantics/index.html).
 
+### UC Semantic Features Actually Used in This Demo
+
+The table below lists every UC semantic layer feature this demo uses to fix Genie agent accuracy, grouped by iteration. This is the complete set — no other mechanisms (prompt hacks, fine-tuning, custom models) are involved. Every fix is a standard Unity Catalog or Genie API capability.
+
+#### Iteration 1 — Metadata Enrichment (Baseline 65% → 85%)
+
+| # | Feature | API / SQL | What It Does in This Demo | Tests Fixed |
+| --- | --- | --- | --- | --- |
+| 1 | **Column Comments** | `ALTER TABLE ... ALTER COLUMN ... COMMENT '...'` | Disambiguation text on individual columns. Tells agent which table to use for lead time variance, defines exact order status values, clarifies vendor late % is per-order. | D04, D06, H01, H02, F03, H03 |
+| 2 | **Table Comments** | `ALTER TABLE ... SET TBLPROPERTIES ('comment' = '...')` | Table-level warnings. Marks `supplier_lead_times` as a pre-aggregated summary that should NOT be used for variance calculations. | D04, D06, H01, H02 |
+| 3 | **Example SQL Queries** | `example_question_sqls` in Genie `serialized_space.instructions` (REST API PATCH) | Certified SQL patterns that appear in the Genie Agent **Examples tab**. Teaches the agent the exact SQL shape for lead time variance, vendor late %, fulfilled order count, and product family decline. 6 examples across supplier + demand agents. | A04, D04, D06, F02, F03, H01, H02, H03 |
+| 4 | **Benchmark Questions** | `benchmarks.questions` in Genie `serialized_space` (REST API PATCH) | Ground-truth Q&A pairs that appear in the Genie Agent **Benchmarks tab**. Used for evaluation — each benchmark has a SQL answer that Genie compares result sets against during benchmark runs. 7 benchmarks across supplier + demand + logistics agents. | (evaluation, not direct fix) |
+
+#### Iteration 2 — Business Semantics (85% → 95%)
+
+| # | Feature | API / SQL | What It Does in This Demo | Tests Fixed |
+| --- | --- | --- | --- | --- |
+| 5 | **UC Metric Views** | `CREATE VIEW ... WITH METRICS LANGUAGE YAML` | Declarative dimension + measure definitions. 4 Metric Views define the exact business formula for every KPI the agent needs: `delivery_performance_by_region` (6 measures), `revenue_comparison_by_region` (4 measures), `inventory_safety_stock_metrics` (5 measures), `supplier_performance_by_continent` (4 measures). Agent queries the view directly instead of inferring SQL. | Stabilizes A01-A06, B01-B04, C01-C05, D01-D07 |
+| 6 | **Open Knowledge View** | `CREATE VIEW ... AS` (cross-domain governed join) | A governed view that joins data from 4 domain schemas no single agent can see. `cost_of_disruption_by_region` combines cancelled revenue (demand), wasted freight (logistics), SLA penalties (supplier), and stockout counts (inventory) into one queryable table. | E03, H05, H06, H07 |
+| 7 | **UC Governed Tags** | `ALTER TABLE SET TAGS ('key' = 'value')` | Classification tags on all metric views and the CoD view: `domain`, `metric_type`, `data_quality`, `time_granularity`. Helps Genie prefer the certified, authoritative asset over a plausible but wrong table. | (ranking / preference) |
+| 8 | **Schema Domain Tags** | `ALTER SCHEMA SET TAGS ('domain' = '...', 'business_unit' = '...')` | Schema-level business domain classification. All 5 domain schemas tagged with their business function. Routes questions to the right schema and signals organizational ownership. | (routing) |
+
+#### Iteration 3 — Governance Layer (95% → 100%)
+
+| # | Feature | API / SQL | What It Does in This Demo | Tests Fixed |
+| --- | --- | --- | --- | --- |
+| 9 | **UC Domain** | Created on the **Discover page** (UI) | Business-aligned organization of data assets. A single "Supply Chain Operations" domain groups all 5 schemas. Domains help Genie route questions to the right schema and help humans discover related assets. Persists through teardown — it IS the governance layer. | (routing + discovery) |
+| 10 | **UC Pages (Glossary)** | Created on the **Discover page** (UI), attached to the Domain | Governed business concept definitions — policies, formulas, terminology — that Genie references authoritatively. **Page 1**: Fiscal Calendar & Targets (FY starts July, Q3=Jan-Mar not Jul-Sep, current FY=FY2027, Q3 service-level target=95%). **Page 2**: Cross-Domain Metric Definitions (vendor late rate = per-ORDER 75%, never per-vendor 83.33%; CoD formula; fulfillment = Fulfilled only). These answer questions that are **intentionally NOT in any SQL table**. | G01, G02, F02 |
+| 11 | **Reference Table** | `CREATE TABLE ... fiscal_targets` + added to Executive agent data sources | Queryable data backing the UC Pages. Contains fiscal quarter definitions and target values so the agent can run SQL against policy data. | G01, G02 |
+
+#### Supporting Features (used throughout)
+
+| # | Feature | API / SQL | What It Does in This Demo |
+| --- | --- | --- | --- |
+| 12 | **Genie Agent Instructions** | `text_instructions` in `serialized_space` (REST API PATCH) | Natural language guidance for each agent: table descriptions, key columns, disambiguation rules, date references, out-of-scope handling. All 5 agents have multi-paragraph instructions. In Iteration 3, agent instructions are **commented out** to test whether UC Pages alone suffice. |
+| 13 | **Genie Agent Data Sources** | `data_sources.tables` in `serialized_space` (REST API PATCH) | Explicit table access lists per agent. Tables sorted alphabetically (API requirement). Views and reference tables added incrementally in each iteration. Controls what each agent can see and query. |
+
+> **Key insight**: Features 1-8 are the **repeatable, scriptable** part of the semantic layer — they can be applied via SQL and API in CI/CD. Features 9-10 are the **governance** part — they require human judgment about business definitions and organizational structure, and they are created in the Discover page UI. Feature 11 bridges the two: a scriptable table that encodes governance decisions. This split mirrors how real teams work: data engineers script the metadata enrichment; data stewards define the business glossary.
+
 ---
 
 ## How Genie Gets the SQL Right
