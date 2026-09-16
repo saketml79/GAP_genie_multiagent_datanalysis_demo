@@ -37,7 +37,8 @@
 # MAGIC | 15 | **Final proof**: Full 40-test rerun after all 3 iterations | Python |
 # MAGIC | 16 | Comprehensive prompt benchmark approach (what and why) | Markdown |
 # MAGIC | 17 | **Comprehensive prompt benchmark**: LIVE Supervisor call + consistency analysis | Python |
-# MAGIC | 18 | Manual step: Delete UC Domain (cleanup) | Markdown |
+# MAGIC | 19 | Next session plans: A02/A03 fix + explainability enhancement | Markdown |
+# MAGIC | 20 | Manual step: Delete UC Domain (cleanup) | Markdown |
 # MAGIC
 # MAGIC ### The 3 iterations
 # MAGIC
@@ -2634,6 +2635,60 @@ if len(stages) >= 2 and comp_iter3:
     print(f"  didn't ask about them), not accuracy failures.")
 
 print(f"\n{'='*90}")
+
+# COMMAND ----------
+
+# DBTITLE 1,NEXT SESSION: A02/A03 Fix + Explainability Enhancement
+# MAGIC %md
+# MAGIC ## Next Session: Two Improvements
+# MAGIC
+# MAGIC ### 1. Fix A02/A03 Non-Determinism (Logistics Example SQL Queries)
+# MAGIC
+# MAGIC **Problem:** The logistics agent intermittently bypasses the `delivery_performance_by_region` metric view and queries the base `shipments` table directly. When it does:
+# MAGIC
+# MAGIC | Test | GT | What Goes Wrong | Wrong Value |
+# MAGIC | --- | --- | --- | --- |
+# MAGIC | **A02** (late delivery rate) | 94.57% | Uses `CURRENT_DATE()` + filters by `actual_delivery_date` instead of `ship_date` | 82% or wrong month |
+# MAGIC | **A03** (avg delay days) | 2.94 | Adds `delay_days IS NOT NULL` filter, changing the average | 2.81 |
+# MAGIC
+# MAGIC **Evidence:** When the agent uses the metric view (as it did in Iter 2 targeted tests and in the comprehensive prompt), both return the correct values **every time**.
+# MAGIC
+# MAGIC **Fix:** Add Example SQL Queries to the **logistics agent** in Iteration 1 (cell 8) — the same technique that fixed D04/D06 (supplier lead time variance). Teach the agent the correct SQL path via the Genie Examples tab:
+# MAGIC
+# MAGIC | Example Question | Example SQL | What It Steers |
+# MAGIC | --- | --- | --- |
+# MAGIC | "Late delivery rate for Western region" | `SELECT late_delivery_rate FROM delivery_performance_by_region WHERE region = 'Western'` | Agent uses metric view instead of base table |
+# MAGIC | "Average delay for late shipments in Western region" | `SELECT avg_delay_days FROM delivery_performance_by_region WHERE region = 'Western'` | Agent uses metric view instead of base table |
+# MAGIC
+# MAGIC This steers the agent to the metric view (pre-computed, always correct) instead of re-deriving from the base table (date-sensitive, filter-sensitive). Same semantic layer approach — not prompt hacking, just teaching the agent which governed asset to use.
+# MAGIC
+# MAGIC **Where to add:** Cell 8 (Iteration 1), `example_sqls["logistics"]` list. Also add corresponding benchmarks.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### 2. Explainability Enhancement (Provenance in All Prompts)
+# MAGIC
+# MAGIC **Problem:** Currently, the assumption tester shows PASS/FAIL and the agent's SQL + narration, but it doesn't show **where the agent got its information from** — which UC semantic feature drove the answer.
+# MAGIC
+# MAGIC **Goal:** Every test result should show provenance — did the agent use:
+# MAGIC * A **metric view** (pre-computed, governed)?
+# MAGIC * A **base table** with a **certified query pattern** (example SQL)?
+# MAGIC * A **UC Page** (governance definition)?
+# MAGIC * A **raw base table** query (no UC guidance — fragile)?
+# MAGIC
+# MAGIC **Implementation ideas:**
+# MAGIC 1. **SQL path detection** — parse the agent's SQL to detect which table/view it queried:
+# MAGIC    * Contains `delivery_performance_by_region` → "Used: Metric View (Iter 2)"
+# MAGIC    * Contains `cost_of_disruption_by_region` → "Used: Open Knowledge View (Iter 2)"
+# MAGIC    * Contains `fiscal_targets` → "Used: Reference Table + UC Page (Iter 3)"
+# MAGIC    * Contains `supplier_orders` with the certified pattern → "Used: Example SQL (Iter 1)"
+# MAGIC    * Contains base table only → "Used: Raw table (no UC guidance)"
+# MAGIC 2. **Narration keyword detection** — check if the narration references UC Pages, fiscal calendar, or business definitions
+# MAGIC 3. **Provenance column in output** — add a `source` column to the test results showing which UC feature the agent actually used
+# MAGIC
+# MAGIC **Where to add:** Update `test_failing_metrics()` and the final proof loop (cell 16) to include provenance detection. Also update the comprehensive benchmark to tag each found metric with its source.
+# MAGIC
+# MAGIC **Why this matters for the demo:** The story isn't just "accuracy went up" — it's "accuracy went up **because** the agent used the governed asset we provided." Provenance makes this visible.
 
 # COMMAND ----------
 

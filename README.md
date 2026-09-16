@@ -243,6 +243,24 @@ Evaluator Agent (external, NOT a supervisor tool)
 
 When a user asks a business question, the Supervisor Agent breaks it down, routes sub-questions to domain-specific Genie Agents, collects their SQL-grounded answers, and synthesizes a unified executive brief.
 
+**Nothing is hardcoded.** The Supervisor is an LLM with tool-calling capability. Each Genie Agent is registered as a "tool" on the Supervisor endpoint. The LLM autonomously decides:
+
+1. **Which agents to call** — it reads the tool descriptions and picks the relevant domain agents
+2. **What to ask each agent** — it generates the sub-query text dynamically (the exact wording varies run to run)
+3. **How to synthesize** — it combines the responses into a unified report
+
+This means there are **two layers of LLM non-determinism**: the Supervisor's phrasing of the sub-query, and the Genie Agent's SQL generation from that sub-query. For example, the Supervisor might ask the logistics agent "Show late delivery rate for Western region" in one run and "What is the percentage of late shipments to Western in August 2026?" in the next — both valid, but the Genie Agent may generate different SQL for each.
+
+The only things we control are:
+
+* **Supervisor instructions** — the system prompt (~2200 chars) defining output format and behavior
+* **Tool descriptions** — short descriptions of each Genie Agent that help the Supervisor decide which one to call
+* **UC semantic features** — comments, metric views, example SQL, UC Pages that help the Genie Agent write correct SQL regardless of how the sub-query is phrased
+
+This is exactly why the semantic layer matters: **we cannot control what the Supervisor asks, but we CAN ensure that however the Genie Agent interprets it, the governed asset steers it to the correct SQL path.**
+
+The sequence diagram below shows one representative orchestration flow (actual sub-queries vary per run):
+
 ```mermaid
 sequenceDiagram
     actor User
