@@ -1198,6 +1198,50 @@ comp_baseline = run_comprehensive_benchmark("Baseline (before any UC semantic la
 
 # COMMAND ----------
 
+# DBTITLE 1,Iteration 1 Approach: Column Comments + Example SQL Queries + Benchmarks
+# MAGIC %md
+# MAGIC ## Iteration 1: Column Comments + Example SQL Queries + Benchmarks
+# MAGIC
+# MAGIC **UC Features Used:** Column/Table Comments (`ALTER COLUMN COMMENT`, `SET TBLPROPERTIES`), Example SQL Queries (Genie Examples tab via `example_question_sqls` API), Benchmark Questions (Genie Benchmarks tab via `benchmarks` API)
+# MAGIC
+# MAGIC **Goal:** Fix failures caused by table ambiguity and status definition confusion — no new objects, just better metadata + proper Genie teaching patterns.
+# MAGIC
+# MAGIC ### What This Fixes (7 of 14 failures)
+# MAGIC
+# MAGIC | Failure | Root Cause | Fix |
+# MAGIC | --- | --- | --- |
+# MAGIC | D04, D06, H01, H02 | Agent uses `supplier_lead_times` (pre-aggregated monthly) instead of `supplier_orders` (per-order granularity) for lead time variance | Column comment on `supplier_orders.lead_time_variance_days` + warning on `supplier_lead_times` table |
+# MAGIC | F03, H03 | Agent counts `Partially_Fulfilled` as fulfilled | Column comment on `sales_orders.order_status` defining each status value precisely |
+# MAGIC | A04 | Agent uses 2024 instead of 2026 for "August" | Temporal context from certified patterns + instruction emphasis |
+# MAGIC
+# MAGIC ### Column Comments Added
+# MAGIC
+# MAGIC * **`supplier_orders.lead_time_variance_days`** — "For ANY lead time variance question, always compute from THIS table at per-purchase-order granularity. Do NOT use `supplier_lead_times`."
+# MAGIC * **`supplier_lead_times` (table-level)** — "WARNING: Pre-aggregated monthly summary. Do NOT use for lead time variance calculations."
+# MAGIC * **`sales_orders.order_status`** — Defines exact values: `Fulfilled` (100% shipped, only this counts), `Partially_Fulfilled` (NOT fulfilled), `Backordered`, `Cancelled`
+# MAGIC * **`supplier_orders.is_late`** — "Vendor late % = COUNT(is_late=true) / COUNT(*) computed per ORDER, not per vendor"
+# MAGIC * **`sales_orders.total_amount`** — "This is the revenue column — SUM(total_amount) gives total revenue"
+# MAGIC
+# MAGIC ### Example SQL Queries (via Genie API → Examples tab)
+# MAGIC
+# MAGIC Instead of embedding SQL in agent instructions, we use the **proper API mechanism**: `example_question_sqls` in `serialized_space.instructions`. These appear in the Genie Agent "Examples" tab and directly teach the LLM the correct SQL patterns.
+# MAGIC
+# MAGIC **Supplier Agent (3 examples):**
+# MAGIC 1. Lead time variance (overall) → `AVG(lead_time_variance_days) FROM supplier_orders`
+# MAGIC 2. Lead time variance (by continent) → same + `WHERE supplier_continent = 'Asia'`
+# MAGIC 3. Vendor late % → `SUM(CASE WHEN is_late...) / COUNT(*)` (per-order, not per-vendor)
+# MAGIC
+# MAGIC **Demand Agent (3 examples):**
+# MAGIC 1. Fulfilled count → `WHERE order_status = 'Fulfilled'` only
+# MAGIC 2. Fulfillment rate → `COUNT(Fulfilled) / COUNT(*)`
+# MAGIC 3. Revenue decline by product family → CTE comparing Aug vs Jul
+# MAGIC
+# MAGIC ### Benchmarks (via Genie API → Benchmarks tab)
+# MAGIC
+# MAGIC Ground-truth Q&A pairs for **evaluating** agent accuracy. Added to supplier, demand, and logistics agents. Each benchmark has a SQL answer that Genie compares result sets against during benchmark runs.
+
+# COMMAND ----------
+
 # DBTITLE 1,ITERATION 1: Column Comments + Example SQL Queries + Benchmarks → test_failing_metrics()
 # ============================================================
 # ITERATION 1: Column Comments + Example SQL Queries + Benchmarks
@@ -1319,6 +1363,7 @@ for agent_name, examples in example_sqls.items():
         ss["instructions"] = {}
     existing = ss["instructions"].get("example_question_sqls", [])
     existing.extend(examples)
+    existing.sort(key=lambda x: x.get("id", ""))
     ss["instructions"]["example_question_sqls"] = existing
     patch_resp = requests.patch(f"{host}/api/2.0/genie/spaces/{space_id}", headers=headers,
                                 json={"serialized_space": json.dumps(ss)})
@@ -1387,6 +1432,7 @@ for agent_name, benchmarks in benchmark_questions.items():
     ss = json.loads(resp.json().get("serialized_space", "{}"))
     existing_bm = ss.get("benchmarks", {}).get("questions", [])
     existing_bm.extend(benchmarks)
+    existing_bm.sort(key=lambda x: x.get("id", ""))
     ss["benchmarks"] = {"questions": existing_bm}
     patch_resp = requests.patch(f"{host}/api/2.0/genie/spaces/{space_id}", headers=headers,
                                 json={"serialized_space": json.dumps(ss)})
@@ -1400,50 +1446,6 @@ iter1_passed, iter1_failed, iter1_errors = test_failing_metrics("After Iteration
 
 # --- Comprehensive Prompt Benchmark: After Iteration 1 ---
 comp_iter1 = run_comprehensive_benchmark("After Iteration 1 (comments + examples + benchmarks)")
-
-# COMMAND ----------
-
-# DBTITLE 1,Iteration 1 Approach: Column Comments + Example SQL Queries + Benchmarks
-# MAGIC %md
-# MAGIC ## Iteration 1: Column Comments + Example SQL Queries + Benchmarks
-# MAGIC
-# MAGIC **UC Features Used:** Column/Table Comments (`ALTER COLUMN COMMENT`, `SET TBLPROPERTIES`), Example SQL Queries (Genie Examples tab via `example_question_sqls` API), Benchmark Questions (Genie Benchmarks tab via `benchmarks` API)
-# MAGIC
-# MAGIC **Goal:** Fix failures caused by table ambiguity and status definition confusion — no new objects, just better metadata + proper Genie teaching patterns.
-# MAGIC
-# MAGIC ### What This Fixes (7 of 14 failures)
-# MAGIC
-# MAGIC | Failure | Root Cause | Fix |
-# MAGIC | --- | --- | --- |
-# MAGIC | D04, D06, H01, H02 | Agent uses `supplier_lead_times` (pre-aggregated monthly) instead of `supplier_orders` (per-order granularity) for lead time variance | Column comment on `supplier_orders.lead_time_variance_days` + warning on `supplier_lead_times` table |
-# MAGIC | F03, H03 | Agent counts `Partially_Fulfilled` as fulfilled | Column comment on `sales_orders.order_status` defining each status value precisely |
-# MAGIC | A04 | Agent uses 2024 instead of 2026 for "August" | Temporal context from certified patterns + instruction emphasis |
-# MAGIC
-# MAGIC ### Column Comments Added
-# MAGIC
-# MAGIC * **`supplier_orders.lead_time_variance_days`** — "For ANY lead time variance question, always compute from THIS table at per-purchase-order granularity. Do NOT use `supplier_lead_times`."
-# MAGIC * **`supplier_lead_times` (table-level)** — "WARNING: Pre-aggregated monthly summary. Do NOT use for lead time variance calculations."
-# MAGIC * **`sales_orders.order_status`** — Defines exact values: `Fulfilled` (100% shipped, only this counts), `Partially_Fulfilled` (NOT fulfilled), `Backordered`, `Cancelled`
-# MAGIC * **`supplier_orders.is_late`** — "Vendor late % = COUNT(is_late=true) / COUNT(*) computed per ORDER, not per vendor"
-# MAGIC * **`sales_orders.total_amount`** — "This is the revenue column — SUM(total_amount) gives total revenue"
-# MAGIC
-# MAGIC ### Example SQL Queries (via Genie API → Examples tab)
-# MAGIC
-# MAGIC Instead of embedding SQL in agent instructions, we use the **proper API mechanism**: `example_question_sqls` in `serialized_space.instructions`. These appear in the Genie Agent "Examples" tab and directly teach the LLM the correct SQL patterns.
-# MAGIC
-# MAGIC **Supplier Agent (3 examples):**
-# MAGIC 1. Lead time variance (overall) → `AVG(lead_time_variance_days) FROM supplier_orders`
-# MAGIC 2. Lead time variance (by continent) → same + `WHERE supplier_continent = 'Asia'`
-# MAGIC 3. Vendor late % → `SUM(CASE WHEN is_late...) / COUNT(*)` (per-order, not per-vendor)
-# MAGIC
-# MAGIC **Demand Agent (3 examples):**
-# MAGIC 1. Fulfilled count → `WHERE order_status = 'Fulfilled'` only
-# MAGIC 2. Fulfillment rate → `COUNT(Fulfilled) / COUNT(*)`
-# MAGIC 3. Revenue decline by product family → CTE comparing Aug vs Jul
-# MAGIC
-# MAGIC ### Benchmarks (via Genie API → Benchmarks tab)
-# MAGIC
-# MAGIC Ground-truth Q&A pairs for **evaluating** agent accuracy. Added to supplier, demand, and logistics agents. Each benchmark has a SQL answer that Genie compares result sets against during benchmark runs.
 
 # COMMAND ----------
 
