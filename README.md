@@ -7,8 +7,8 @@ Enterprise data warehouses and data marts contain the answers to complex busines
 Using a realistic supply chain scenario with 23 tables across 5 business domains, this workshop:
 
 - Builds a **Supervisor Agent** that orchestrates 5 domain-specific **Genie Agents** to answer complex cross-domain business questions
-- Starts at **low accuracy** with a minimal baseline and progressively improves to **100% accuracy** across 5 iterations
-- Demonstrates **why each improvement matters**: column comments, column synonyms, certified queries + supervisor hardening, metric views, and UC Pages + Domains
+- Starts at **low accuracy** with a minimal baseline and progressively improves to **100% accuracy** across 3 iterations
+- Demonstrates **why each improvement matters**: column comments + certified queries, UC metric views + governed tags + Open Knowledge views, and UC Pages + Domains
 - Shows that the last mile of accuracy requires **data governance** (formal business definitions, Unity Catalog tags, metric views) — not just better prompts
 
 ### What Are Genie Agents and Supervisor Agents?
@@ -29,7 +29,7 @@ Using a realistic supply chain scenario with 23 tables across 5 business domains
 4. A data team member reviews the feedback, identifies the root cause (wrong column, wrong filter, ambiguous metric), and applies a fix — exactly the same kinds of fixes shown in this demo (certified queries, synonyms, instructions, metric views)
 5. Over time, the agent gets better and better at answering questions correctly
 
-> **This demo compresses months of user-feedback-driven improvement into 5 scripted iterations**, so you can see the full journey in a single workshop session. Every fix we apply (comments, synonyms, certified queries, metric views, UC Pages) is the same fix a data team would apply in response to real user feedback.
+> **This demo compresses months of user-feedback-driven improvement into 3 scripted iterations**, so you can see the full journey in a single workshop session. Every fix we apply (comments, synonyms, certified queries, metric views, UC Pages) is the same fix a data team would apply in response to real user feedback.
 
 ---
 
@@ -39,7 +39,7 @@ A **multi-regional retail company** sells 100 SKUs across 5 product families (Ap
 
 The company's data warehouse is organized in [Unity Catalog](https://docs.databricks.com/en/data-governance/unity-catalog/index.html) with 5 domain schemas — each owned by a different business team — plus a shared `reporting` schema for cross-domain executive views.
 
-### Data Model (Final State — after all 5 iterations)
+### Data Model (Final State)
 
 The demo starts with **19 base tables + 4 reporting views**, then layers on **4 UC Metric Views**, **1 cross-domain governed executive view**, and the benchmark table used for evaluation. The diagram below shows the final semantic surface area exposed to Genie.
 
@@ -129,36 +129,36 @@ If the Supervisor or any domain agent **cannot find** a metric the prompt asks f
 
 ### Image 1: UC Semantics Architecture
 
-![UC Semantics Architecture](docs/images/uc_semantics_stack.png)
+![UC Semantics Architecture](docs/images/1.png)
 
 The diagram above shows how the **Genie Ontology** sits between AI consumers (Genie, MCP/SQL/API, Dashboards) and the underlying data sources (Delta Lake, Iceberg, federated sources, business apps, workspace assets). The Ontology is a **continuously-learned enterprise context** layer — it gets smarter every time a user interacts with data.
 
 Under the Ontology, **Unity Catalog Semantics** provides the **user-defined** semantic objects that feed the Ontology:
 
-* **Domains**: Business-aligned organization of data assets. In this demo: Supply Chain — Demand, Inventory, Logistics, Suppliers, Executive. Domains help Genie route questions to the right schema and help humans discover related assets on the Discover page.
-* **Glossary** (UC Pages): Governed business concept definitions — policies, formulas, terminology — that Genie references authoritatively. In this demo: Q3 Targets, Cost of Disruption formula, Revenue definition, OTD formula, Vendor/Supplier terminology. Pages answer questions that are intentionally NOT in any SQL table.
+* **Domains**: Business-aligned organization of data assets. In this demo: a single "Supply Chain Operations" domain that groups all 5 schemas. Domains help Genie route questions to the right schema and help humans discover related assets on the Discover page.
+* **Glossary** (UC Pages): Governed business concept definitions — policies, formulas, terminology — that Genie references authoritatively. In this demo: "Fiscal Calendar & Targets" (Q3=Jan-Mar, target=95%) and "Cross-Domain Metric Definitions" (CoD formula, OTD vs supplier late rate). Pages answer questions that are intentionally NOT in any SQL table.
 * **Metrics** (Metric Views): Reusable KPI definitions with `MEASURE()` syntax. In this demo: `delivery_performance_by_region`, `revenue_comparison_by_region`, `inventory_safety_stock_metrics`, `supplier_performance_by_continent`. Metric Views eliminate formula ambiguity by encoding the exact business definition in the column name itself.
 
 The key insight: data alone is not enough. The UC Semantics layer teaches Genie **what the data means**, not just what it contains.
 
 ### Image 2: The Six Foundation Layers
 
-![Six Foundation Layers](docs/images/six_foundation_layers.png)
+![Six Foundation Layers](docs/images/2.png)
 
 This diagram shows the six layers that make the Genie Ontology progressively more accurate. Each layer builds on the previous one. The feedback arrow on the right shows that evaluation at Layer 5 drives improvements back into every earlier layer.
 
 | Layer | What It Does | This Demo’s Implementation |
 | --- | --- | --- |
 | **0. Get the data model right** | Model gold for agents (star schemas, clear grain). Resolve entities into golden records. | 23 base tables across 5 domain schemas with clear fact tables (`sales_orders`, `shipments`, `inventory_ledger`, `supplier_orders`) and dimension tables. Fixed monthly grain. |
-| **1. Enrich metadata** | Table and column descriptions. Governed tags and classification. `dbxmetagen` for scale. | **Iter 1**: 180+ column/table comments via `ALTER TABLE SET COMMENT`. **Iter 4**: governed tags (`domain`, `certification_status`). `dbxmetagen` mentioned as scale path but excluded from workshop. |
-| **2. Model business semantics** | Metric Views for certified KPIs. Declared relationships (PK/FK). Domains. Pages. | **Iter 4**: 4 UC Metric Views + cross-domain CoD view. **Iter 5** (manual): 5 Domains + 5 UC Pages. PK/FK relationships documented for future implementation. |
-| **3. Curate context-rich assets** | Certify trusted assets. Classify and quality-check. Instructions, definitions, examples. | **Iter 3**: 20 certified SQL query templates + supervisor hardening (7-section format + exact routing phrasings). **Iter 4**: Certification tags on all assets. |
+| **1. Enrich metadata** | Table and column descriptions. Governed tags and classification. `dbxmetagen` for scale. | **Iter 1**: 180+ column/table comments via `ALTER TABLE SET COMMENT`. **Iter 2**: governed tags (`domain`, `certification_status`). `dbxmetagen` mentioned as scale path but excluded from workshop. |
+| **2. Model business semantics** | Metric Views for certified KPIs. Declared relationships (PK/FK). Domains. Pages. | **Iter 2**: 4 UC Metric Views + cross-domain Open Knowledge view. **Iter 3** (manual): UC Domain + UC Pages. PK/FK relationships documented for future implementation. |
+| **3. Curate context-rich assets** | Certify trusted assets. Classify and quality-check. Instructions, definitions, examples. | **Iter 1**: Certified SQL examples in agent instructions + column/table comments. **Iter 2**: Governed tags on all metric views and schemas. |
 | **4. Govern access** | UC access controls. Row-level security and column masking. ABAC. Unity AI Gateway. | Standard catalog/schema grants. Row-level security, column masking, and ABAC documented as extension opportunities. |
 | **5. Evaluate & improve** | Benchmark answers. Observe and trace. Capture feedback. Watch for drift. | `ground_truth_kpis` benchmark table (10 primary + 14 indirect metrics). Python scorer + Evaluator Genie Agent. Verification after every iteration shows progressive improvement. |
 
-The practical rule: **build one domain at a time, one layer at a time.** This workshop compresses the full journey into 5 scripted iterations so you can see the progression in a single session.
+The practical rule: **build one domain at a time, one layer at a time.** This workshop compresses the full journey into 3 scripted iterations so you can see the progression in a single session.
 
-> **Note on images**: The two reference images above are from [Databricks UC Semantics documentation](https://docs.databricks.com/en/uc-semantics/index.html). To display them in this README, save the images as `docs/images/uc_semantics_stack.png` and `docs/images/six_foundation_layers.png` in the repo root. If the images are not present, the descriptions above serve as the authoritative reference.
+> **Note on images**: The two reference images above are from [Databricks UC Semantics documentation](https://docs.databricks.com/en/uc-semantics/index.html).
 
 ---
 
@@ -255,20 +255,20 @@ The Supervisor Agent investigates all 5 domains and produces a structured execut
 
 Before any UC Semantics features are applied, the 5 Genie Agents are tested with **40 individual questions** using **exact 2-decimal precision matching** (`round(abs(found), 2) == round(abs(expected), 2)`). No tolerance bands — either it matches or it doesn't.
 
-**Baseline score: 28/40 DISPROVED (70%), 12 CONFIRMED (30%)**
+**Baseline score: 26/40 PASS (65%), 14 FAIL (35%)**
 
-> "DISPROVED" means the agent answers correctly at baseline WITHOUT any UC feature.
-> "CONFIRMED" means the agent genuinely needs the UC feature to answer correctly.
+> "PASS" means the agent answers correctly at baseline WITHOUT any UC feature.
+> "FAIL" means the agent genuinely needs the UC feature to answer correctly.
 
 | Group | Tests | Pass | Fail | Coverage |
 | --- | --- | --- | --- | --- |
-| A: Logistics MV | 6 | 6 | 0 | 100% at baseline |
+| A: Logistics MV | 6 | 5 | 1 | A04 fails: date ambiguity ("August" without year) |
 | B: Demand MV | 4 | 4 | 0 | 100% at baseline |
 | C: Inventory MV | 5 | 5 | 0 | 100% at baseline |
 | D: Supplier MV | 7 | 5 | 2 | Wrong table (supplier_lead_times vs supplier_orders) |
-| E: Cross-domain | 3 | 2 | 1 | CoD requires cross-domain view |
-| F: Indirect/Ambiguity | 6 | 3 | 3 | Status and aggregation ambiguity |
-| H: Hard failures | 7 | 4 | 3 | Cross-domain queries impossible for single agent |
+| E: Cross-domain | 3 | 2 | 1 | CoD requires cross-domain Open Knowledge view |
+| F: Indirect/Ambiguity | 6 | 4 | 2 | Per-vendor vs per-order ambiguity, status filter |
+| H: Hard failures | 7 | 1 | 6 | Cross-domain queries impossible for single agent |
 | G: Q3/UC Pages | 2 | 0 | 2 | Target not in any table |
 
 ### The 12 Failures and Their Fix Plan (3 Iterations)
@@ -290,15 +290,15 @@ Before any UC Semantics features are applied, the 5 Genie Agents are tested with
 
 ### Iteration Plan
 
-| Iteration | UC Feature Class | Targets | Expected Outcome |
-| --- | --- | --- | --- |
-| **1. Comments + Certified Queries** | Column descriptions, table comments, certified SQL examples | D04, D06, F02, F03, F05, H03 | 34/40 → fixes wrong-table and status ambiguity |
-| **2. Metric Views + CoD View** | Cross-domain governed views with pre-computed measures | E03, H05, H06, H07 | 38/40 → fixes cross-domain queries |
-| **3. UC Pages (fiscal calendar + targets)** | Reference data for business policy not in any table | G01, G02 | 40/40 → fixes missing business definitions |
+| Iteration | UC Feature Class | What It Does | Targets | Expected Outcome |
+| --- | --- | --- | --- | --- |
+| **1. Column Comments + Certified Queries** | Enterprise Context (Layer 1) | Table/column comments for disambiguation + certified SQL examples for ambiguous metrics | A04, D04, D06, F03, H01, H02, H03 | 33/40 → fixes wrong-table, status ambiguity, and date inference |
+| **2. UC Metric Views + Governed Tags + Open Knowledge** | Business Semantics (Layer 2) | 4 domain metric views (YAML), schema domain tags, 1 cross-domain Open Knowledge view (CoD) | E03, H05, H06, H07 | 37/40 → fixes cross-domain queries |
+| **3. UC Pages + Domain + Temporal Context** | Glossary & Governance (Layer 2+3) | Fiscal calendar reference table, temporal context on all agents, UC Domain + Pages (created in UI) | F02, G01, G02 | 40/40 → fixes missing business definitions + remaining ambiguity |
 
 ### Key Insight
 
-Genie Agents are remarkably capable at baseline — they correctly map business terms to column names ("revenue" → `total_amount`, "fill rate" → `service_level_pct`) and handle region inference ("West" → `ILIKE '%Western%'`) without any synonyms, comments, or instructions. The 70% baseline accuracy proves that the UC Semantics stack is needed only for genuinely hard cases: table disambiguation, definition ambiguity, cross-domain computation, and business policy.
+Genie Agents are remarkably capable at baseline — they correctly map business terms to column names ("revenue" → `total_amount`, "fill rate" → `service_level_pct`) and handle region inference ("West" → `ILIKE '%Western%'`) without any synonyms, comments, or instructions. The 65% baseline accuracy proves that the UC Semantics stack is needed only for genuinely hard cases: table disambiguation, definition ambiguity, cross-domain computation, and business policy.
 
 ---
 
@@ -356,100 +356,75 @@ Set the `warehouse_id` widget to your SQL Warehouse ID before running.
 This creates a **deliberately minimal** baseline:
 - Genie Agents have tables but **no** certified queries, synonyms, or enhanced instructions
 - Supervisor has basic instructions — no structured format, no specific question phrasings
-- Expected accuracy: **~30%** (3 of 10 ground truth metrics match)
+- Expected accuracy: **~65%** (26 of 40 metric tests pass at baseline)
 
 **Test it now** — go to the Agents playground and send the canonical prompt. The Supervisor will try but produce inconsistent, partially incorrect results.
 
 #### Step 3: Progressive Improvement (the core demo)
 
-Run each iteration **in order**. After each one, invoke the Supervisor with the same prompt to see improvement.
+All 3 improvement iterations run **inline** in `src/notebooks/00_run_all.py` (cells 7-9). Run the full notebook end-to-end — do NOT run iteration cells in isolation (they depend on the baseline agents created in earlier cells).
 
-##### Iteration 1: Column/Table Comments
+After each iteration cell, the notebook automatically runs `test_failing_metrics()` to show progress.
 
-| # | Script | What It Does |
-|---|--------|-------------|
-| 7 | `src/07_add_all_comments.py` | Adds 180+ column and table comments explaining data semantics |
+##### Iteration 1: Column Comments + Example SQL Queries + Benchmarks (cell 7)
 
-**UC Feature**: `ALTER TABLE/COLUMN SET COMMENT`
+**UC Features**: `ALTER TABLE SET COMMENT`, Example SQL Queries (`example_question_sqls` API → Genie Examples tab), Benchmarks (`benchmarks.questions` API → Genie Benchmarks tab)
 
-**What it fixes**: Agents learn that `below_safety_stock_flag` counts are per SKU-warehouse position (not per unique SKU), and that `stockout_flag` requires `COUNT(DISTINCT sku_id)`. Fixes metrics **#4** and **#5**.
+**What it fixes**: Table/column comments resolve table disambiguation (agent picks `supplier_orders` instead of `supplier_lead_times` for lead time variance). Example SQL Queries teach Genie correct SQL patterns for common questions via the structured Examples tab (stronger than embedding SQL in text instructions). Benchmark questions provide ground-truth Q&A pairs for evaluating accuracy via the Benchmarks tab. Fixes status-filter ambiguity ("Fulfilled" excludes "Partially_Fulfilled") and per-order vs per-vendor aggregation.
 
-##### Iteration 2: Column Synonyms
+**Targets**: A04, D04, D06, F03, H01, H02, H03 → **33/40 (82%)**
 
-| # | Script | What It Does |
-|---|--------|-------------|
-| - | `src/improvements/iteration_03_column_synonyms.py` | Adds 107 column synonyms + enhanced domain instructions to all 5 Genie Agents |
+##### Iteration 2: UC Metric Views + Governed Tags + Open Knowledge View (cell 8)
 
-**UC Feature**: Genie `column_configs.synonyms` API
+**UC Features**: `CREATE VIEW WITH METRICS LANGUAGE YAML`, `ALTER TABLE SET TAGS`, `ALTER SCHEMA SET TAGS`
 
-**What it fixes**: Maps business vocabulary to technical column names — "revenue" → `total_amount`, "fill rate" → `service_level_pct`, "vendor" → `supplier_*` tables, "SLA penalty" → `penalty_amount`, "region" → `destination_region`. Fixes metrics **#1**, **#3**, **#6**, **#7**.
+**What it fixes**: 4 UC Metric Views (`delivery_performance_by_region`, `revenue_comparison_by_region`, `inventory_safety_stock_metrics`, `supplier_performance_by_continent`) encode exact KPI formulas in governed column names. 1 Open Knowledge View (`cost_of_disruption_by_region`) bridges data from 4 domain schemas that no single agent can access alone. Governed tags and schema domain tags improve asset discovery.
 
-##### Iteration 3: Certified Queries + Supervisor Hardening
+**Targets**: E03, H05, H06, H07 → **37/40 (92%)**
 
-| # | Script | What It Does |
-|---|--------|-------------|
-| - | `src/improvements/iteration_02_certified_queries.py` | Adds 20 certified SQL query templates across 5 domain Genie Agents |
-| - | `src/improvements/iteration_04_supervisor_hardening.py` | Updates Supervisor instructions (7-section format) + tool descriptions with exact question phrasings |
+**Key insight**: Open Knowledge is a governed view that crosses domain boundaries — it exists because some business questions (like Cost of Disruption) require data from multiple schemas.
 
-**UC Feature**: `example_question_sqls` + Supervisor `instructions`
+##### Iteration 3: UC Domain + UC Pages — Governance Layer (cell 9)
 
-**What it fixes**: SQL templates encode the correct MoM formula and OTD computation. Supervisor hardening ensures precise question routing. Fixes metrics **#1** (MoM formula) and **#2** (OTD calc).
+**UC Features**: UC Domain (Discover page), UC Pages (glossary / business definitions), Reference Table (`fiscal_targets`)
 
-**Key insight**: Certified queries + orchestrator routing work together — neither alone is sufficient.
+**What it fixes**: UC Pages feed directly into Genie's ontology. **Page 1** ("Fiscal Calendar & Targets") defines Q3=Jan-Mar (not calendar Jul-Sep), the 95% service-level target, and temporal context (reference date Sept 1 2026, last month = August 2026). **Page 2** ("Cross-Domain Metric Definitions") governs that "vendor late rate" = late POs / total POs per ORDER (75.0%), never COUNT(DISTINCT supplier_id) per-vendor (83.33%). The `fiscal_targets` reference table provides the queryable data backing Page 1. No agent instruction injection — the governance layer IS the fix.
 
-##### Iteration 4: Metric Views + Cost of Disruption + Certification + Tags
+**Targets**: F02, G01, G02 → **40/40 (100%)**
 
-| # | Script | What It Does |
-|---|--------|-------------|
-| - | `src/improvements/iteration_05_metric_views_glossary.py` | Creates 4 UC Metric Views (`WITH METRICS LANGUAGE YAML`), UC tags, certification |
-| - | `src/improvements/iteration_06_cost_of_disruption.py` | Creates cross-domain `cost_of_disruption_by_region` view + certified query |
+**Key insight**: The last mile of accuracy requires business governance, not prompt engineering. UC Pages resolve ambiguity at the ontology level — when Genie encounters "Q3 target" or "% vendors delivered late", it consults the governed Page definitions before writing SQL. This is what separates a semantic layer from mere metadata enrichment.
 
-**UC Features**: `CREATE VIEW WITH METRICS LANGUAGE YAML`, governed tags, certification
+##### Prerequisite: UC Domain and Pages (manual — from UI)
 
-**What it fixes**: Pre-computed metric views with unambiguous column names and `MEASURE()` syntax. Cross-domain CoD view. Fixes metrics **#2** (OTD via view), **#4** (authoritative count), **#9** (CoD).
+Before running Iteration 3, create these on the **Discover** page:
 
-**Key insight**: When a metric has multiple valid interpretations, the only reliable fix is a **pre-computed metric view** that encodes the definition in the column name itself.
+* **Domain**: "Supply Chain Operations" — assign all 5 schemas
+* **Page 1**: "Fiscal Calendar & Targets" — Synonyms: Fiscal, Fiscal Year. Definition: July FY start, Q1=Jul-Sep, Q2=Oct-Dec, **Q3=Jan-Mar** (NOT calendar Jul-Sep), Q4=Apr-Jun. Business Use: Q3 service-level target = 95.0%. Reference date: Sept 1, 2026. Last month = August 2026, prior month = July 2026.
 
-##### Iteration 5: UC Pages + Domains (manual — from UI)
+  ![UC Page: Fiscal Calendar & Targets](docs/images/3.png)
 
-This iteration is done by the user from the Databricks UI, not via notebook. See the **UC Pages** section below.
+* **Page 2**: "Cross-Domain Metric Definitions" — Definition: Vendor Late Rate = late POs / total POs per ORDER (75.0%), NEVER per distinct vendor (83.33%). OTD rate (94.57%) ≠ supplier late rate (75%). CoD formula. Fulfillment rate = only `Fulfilled` status, not `Partially_Fulfilled`.
 
-**UC Features**: UC Pages (governed business definitions), Domains (business-aligned grouping)
+  ![UC Page: Cross-Domain Metric Definitions](docs/images/4.png)
 
-**What it fixes**: The prompt asks "Are we going to miss our Q3 service-level targets?" — the target (95%) is a business policy, not data. A UC Page defines it authoritatively. Fixes metric **#10**.
-
-**Key insight**: The last mile of accuracy requires business governance — policies and definitions that exist nowhere in the data.
-
-#### Step 4: Run the Visual Demo
+#### Step 4: Teardown (when done)
 
 | # | Script | What It Does |
 |---|--------|-------------|
-| - | `src/10_demo_runner.py` | Generates plotly charts from live data + invokes the Supervisor + scores against ground truth |
-
-Or invoke the Supervisor directly from the [Agents playground](https://docs.databricks.com/en/large-language-models/llm-serving-intro.html) with the canonical prompt.
-
-> **Note on visualizations**: Genie Agents produce interactive charts when used standalone in the Genie UI. When called as tools by a Supervisor Agent via API, they return structured data tables. The `10_demo_runner.py` generates plotly charts from the same underlying data to provide the visual layer.
-
-#### Step 5: Teardown (when done)
-
-| # | Script | What It Does |
-|---|--------|-------------|
-| 9 | `src/09_teardown.py` | Deletes all Genie Agents, Supervisor Agent, and drops the entire catalog |
+| 9 | `src/09_teardown.py` | Deletes all Genie Agents, Supervisor Agent, and drops the entire catalog. UC Domain + Pages persist by design (governance layer). |
 
 ---
 
 ## Progressive Improvement Summary
 
-| Stage | What Changed | UC Feature | Metrics Fixed | Score |
-|-------|-------------|-----------|--------------|-------|
-| **Baseline** | Bare tables, no semantic context | None | #8 (avg delay) | **~1-3/10** |
-| **+ Column Comments** | 180+ column descriptions (Iter 1) | `ALTER TABLE SET COMMENT` | #4, #5 (inventory granularity) | **~3-5/10** |
-| **+ Column Synonyms** | 107 business-to-technical mappings (Iter 2) | Genie `column_configs.synonyms` | #1, #3, #6, #7 (revenue, fill rate, vendor) | **~5-7/10** |
-| **+ Certified SQL + Hardening** | SQL templates + supervisor routing (Iter 3) | `example_question_sqls` + instructions | #1 (MoM formula), #2 (OTD calc) | **~7-8/10** |
-| **+ Metric Views + CoD** | Pre-computed views + cross-domain join (Iter 4) | `CREATE VIEW WITH METRICS LANGUAGE YAML` | #2, #4, #9 (OTD, safety stock, CoD) | **~9-10/10** |
-| **+ UC Pages + Domains** | Business policies + domain organization (Iter 5) | UC Pages (manual from UI) | #10 (Q3 target = 95%) | **10/10** |
+| Stage | What Changed | UC Feature | Score |
+|-------|-------------|-----------|-------|
+| **Baseline** | Bare tables + basic agent instructions, no semantic enrichment | None | **26/40 (65%)** |
+| **+ Iter 1: Comments + Certified Queries** | Column/table comments for disambiguation + certified SQL examples | `ALTER TABLE SET COMMENT` + instruction text | **33/40 (82%)** |
+| **+ Iter 2: Metric Views + Tags + Open Knowledge** | 4 UC Metric Views (YAML) + governed tags + CoD cross-domain view | `CREATE VIEW WITH METRICS LANGUAGE YAML` + `ALTER TABLE SET TAGS` | **37/40 (92%)** |
+| **+ Iter 3: UC Pages + Domain + Temporal** | Fiscal targets reference table + temporal context + UC Domain & Pages (UI) | UC Pages + Domains + reference tables | **40/40 (100%)** |
 
-## Expected Output (after iteration 5)
+## Expected Output (after all 3 iterations)
 
 The Supervisor produces a structured 7-section executive brief:
 
@@ -471,16 +446,16 @@ When business users ask questions, they use **business vocabulary** ("revenue", 
 
 | # | Business Term (in prompt) | What Agent Guesses | Correct Column/Table | Why It Fails | UC Feature Fix | Iteration |
 |---|---|---|---|---|---|---|
-| 1 | "revenue decline" | Looks for `revenue` column | `total_amount` in sales_orders | No column named revenue | Column Synonym | Iter 2 |
-| 2 | "on-time delivery rate" | Computes OTD incorrectly | Inverse of `is_late` in shipments | Must compute `NOT is_late` as % | Synonym + Metric View | Iter 2 + Iter 4 |
-| 3 | "fill rate" | Looks for `fill_rate` column | `service_level_pct` in executive_kpis | Different name entirely | Column Synonym | Iter 2 |
+| 1 | "revenue decline" | Looks for `revenue` column | `total_amount` in sales_orders | No column named revenue | Column Comment + Certified Query | Iter 1 |
+| 2 | "on-time delivery rate" | Computes OTD incorrectly | Inverse of `is_late` in shipments | Must compute `NOT is_late` as % | Metric View | Iter 2 |
+| 3 | "fill rate" | Looks for `fill_rate` column | `service_level_pct` in executive_kpis | Different name entirely | Column Comment + Certified Query | Iter 1 |
 | 4 | "inventory positions below safety stock" | `COUNT(DISTINCT sku_id)` = 61 | `COUNT(*)` per SKU-warehouse row = 109 | Multiple rows per SKU (one per warehouse) | Column Comment (explains granularity) | Iter 1 |
 | 5 | "SKUs stocked out" | `COUNT(*)` = 56 | `COUNT(DISTINCT sku_id)` = 33 | Opposite ambiguity to #4 | Column Comment (explains DISTINCT) | Iter 1 |
-| 6 | "vendor SLA penalties" | Looks in wrong schema | `penalty_amount` in vendor_slas | "vendor" not in column/table names | Synonym: vendor→supplier | Iter 2 |
-| 7 | "vendors delivered late" | Looks in wrong schema | `supplier_orders.is_late` | "vendor" not in supplier schema | Synonym: vendor→supplier | Iter 2 |
+| 6 | "vendor SLA penalties" | Looks in wrong schema | `penalty_amount` in vendor_slas | "vendor" not in column/table names | Certified Query | Iter 1 |
+| 7 | "vendors delivered late" | Looks in wrong schema | `supplier_orders.is_late` | "vendor" not in supplier schema | Certified Query | Iter 1 |
 | 8 | "average delay" | Usually finds it | `delay_days` in shipments | Relatively direct mapping | Direct (baseline findable) | Baseline |
-| 9 | "Cost of Disruption" | No such table/column exists | Cross-domain view joining 4 tables | Concept undefined anywhere in schema | Metric View (cross-domain) | Iter 4 |
-| 10 | "Q3 service-level targets" | Guesses 90% or 95% | **95.0%** — defined in UC Page only | Business policy, not in any table | **UC Page** | Iter 5 (manual) |
+| 9 | "Cost of Disruption" | No such table/column exists | Cross-domain view joining 4 tables | Concept undefined anywhere in schema | Open Knowledge view | Iter 2 |
+| 10 | "Q3 service-level targets" | Guesses 90% or 95% | **95.0%** — defined in UC Page only | Business policy, not in any table | UC Page | Iter 3 |
 
 ### Primary Ground Truth Metrics (10 metrics — explicitly asked in prompt)
 
@@ -488,16 +463,16 @@ These are dynamically computed from live data and stored in `reporting.ground_tr
 
 | # | Agent | Metric | Example GT Value | Source Table/View | Reference SQL | UC Feature Needed |
 |---|---|---|---|---|---|---|
-| 1 | demand-analysis | Western revenue MoM change (Aug vs Jul 2026) | -1240330.12 | demand_analysis.sales_orders | `SUM(total_amount) for Aug - SUM for Jul WHERE region='Western'` | Synonym: revenue→total_amount |
-| 2 | logistics-operations | Western on-time delivery rate (Aug 2026) | 5.4 | logistics_operations.shipments | `ROUND(AVG(CASE WHEN NOT is_late THEN 1.0 ELSE 0.0 END)*100, 1)` | Synonym + Metric View |
-| 3 | executive-reporting | Fill rate | 70.4 | reporting.executive_kpis | `SELECT service_level_pct` | Synonym: fill_rate→service_level_pct |
+| 1 | demand-analysis | Western revenue MoM change (Aug vs Jul 2026) | -1240330.12 | demand_analysis.sales_orders | `SUM(total_amount) for Aug - SUM for Jul WHERE region='Western'` | Comment + Certified Query (Iter 1) |
+| 2 | logistics-operations | Western on-time delivery rate (Aug 2026) | 5.4 | logistics_operations.shipments | `ROUND(AVG(CASE WHEN NOT is_late THEN 1.0 ELSE 0.0 END)*100, 1)` | Metric View (Iter 2) |
+| 3 | executive-reporting | Fill rate | 70.4 | reporting.executive_kpis | `SELECT service_level_pct` | Direct (baseline findable) |
 | 4 | inventory-management | Western below safety stock positions | 109 | inventory_management.inventory_ledger | `COUNT(*) WHERE below_safety_stock_flag AND region='Western'` | Comment (SKU-warehouse granularity) |
 | 5 | inventory-management | Western stockout SKUs | 33 | inventory_management.inventory_ledger | `COUNT(DISTINCT sku_id) WHERE stockout_flag AND region='Western'` | Comment (COUNT DISTINCT) |
-| 6 | supplier-risk | Total vendor SLA penalties (Aug 2026) | 1185043.1 | supplier_procurement.vendor_slas | `SUM(penalty_amount) WHERE is_breached=true` | Synonym: vendor→supplier |
-| 7 | supplier-risk | Vendor late delivery pct (Aug 2026) | 75.0 | supplier_procurement.supplier_orders | `AVG(CASE WHEN is_late...) * 100` | Synonym: vendor→supplier |
+| 6 | supplier-risk | Total vendor SLA penalties (Aug 2026) | 1185043.1 | supplier_procurement.vendor_slas | `SUM(penalty_amount) WHERE is_breached=true` | Certified Query (Iter 1) |
+| 7 | supplier-risk | Vendor late delivery pct (Aug 2026) | 75.0 | supplier_procurement.supplier_orders | `AVG(CASE WHEN is_late...) * 100` | Certified Query (Iter 1) |
 | 8 | logistics-operations | Western avg delay days (Aug 2026) | 2.9 | logistics_operations.shipments | `AVG(delay_days) WHERE is_late AND dest_region='Western'` | Direct (baseline findable) |
-| 9 | executive-reporting | Western Cost of Disruption | 3757298.31 | reporting.cost_of_disruption_by_region | Cross-domain join: cancelled rev + backorder rev + late freight + SLA penalties | Metric View (cross-domain, Iter 4) |
-| 10 | executive-reporting | Q3 service-level target | 95.0 | **UC Page** (not in any table) | Business policy defined in UC Page | **UC Page** (Iter 5 — manual) |
+| 9 | executive-reporting | Western Cost of Disruption | 3757298.31 | reporting.cost_of_disruption_by_region | Cross-domain join: cancelled rev + backorder rev + late freight + SLA penalties | Open Knowledge view (Iter 2) |
+| 10 | executive-reporting | Q3 service-level target | 95.0 | **UC Page** (not in any table) | Business policy defined in UC Page | **UC Page** (Iter 3) |
 
 > **Note**: Values are examples from current data. All are computed dynamically — no hardcoding.
 
@@ -524,163 +499,18 @@ These are NOT explicitly asked in the prompt, but appear in the agent's analysis
 
 ---
 
-## Tracked Ground Truth SQL Catalog
+## Tracked Ground Truth
 
-The benchmark scope is now larger than the original 9-metric framing.
+The full test suite consists of **40 individual metric tests** organized into 8 groups (A-H). Each test sends a natural-language question to a specific Genie Agent and compares the returned value against a ground truth at exact 2-decimal precision.
 
-* **Primary GTs**: 10 metrics explicitly asked in the canonical prompt
-* **Indirect GTs**: 14 supporting metrics used to validate whether the agent's analysis is numerically grounded
-* **Total tracked metrics**: 24
+See `00_run_all` cell 6 (Assumption Tester v3) for the complete test definitions and ground truth values.
 
-The right implementation is to keep these in one benchmark catalog with at least:
-
-* `metric_tier` = `primary` or `indirect`
-* `reference_sql`
-* `reference_source_type` = `table`, `metric_view`, `view`, or `uc_page`
-* `reference_source_name`
-
-Below are the authoritative SQL patterns that feed the tracked metrics.
-
-### SQL A — Revenue comparison metric view
-Feeds **GT #1, #11, #12, #13**.
-
-```sql
-SELECT
-  region,
-  revenue_last_month,
-  revenue_prior_month,
-  revenue_change_dollars,
-  revenue_change_pct
-FROM <catalog_name>.demand_analysis.revenue_comparison_by_region
-WHERE region = 'Western'
-```
-
-### SQL B — Western product-family decline breakdown
-This is not yet a separately scored GT row, but it is part of the canonical answer and should remain part of the final narrative.
-
-```sql
-SELECT
-  product_family,
-  revenue_last_month,
-  revenue_prior_month,
-  revenue_change_dollars,
-  revenue_change_pct
-FROM <catalog_name>.demand_analysis.revenue_comparison_by_region
-WHERE region = 'Western'
-ORDER BY revenue_change_dollars ASC
-```
-
-### SQL C — Delivery performance metric view
-Feeds **GT #2, #8, #14, #15, #16, #17**.
-
-```sql
-SELECT
-  destination_region,
-  total_shipments,
-  late_shipments,
-  late_delivery_rate,
-  avg_delay_days,
-  wasted_freight_cost,
-  on_time_delivery_rate
-FROM <catalog_name>.logistics_operations.delivery_performance_by_region
-WHERE destination_region = 'Western'
-```
-
-### SQL D — Inventory safety-stock metric view
-Feeds **GT #4, #5, #18, #19**.
-
-```sql
-SELECT
-  region,
-  positions_below_safety_stock,
-  unique_skus_below_safety,
-  warehouses_affected,
-  avg_days_of_supply,
-  stockout_positions,
-  unique_skus_in_stockout
-FROM <catalog_name>.inventory_management.inventory_safety_stock_metrics
-WHERE region = 'Western'
-```
-
-### SQL E — Supplier performance metric view by continent
-Feeds **GT #20 and #21** directly, and provides governed context for **GT #7**.
-
-```sql
-SELECT
-  supplier_continent,
-  total_purchase_orders,
-  late_purchase_orders,
-  supplier_late_rate_pct,
-  avg_lead_time_variance
-FROM <catalog_name>.supplier_procurement.supplier_performance_by_continent
-ORDER BY supplier_late_rate_pct DESC
-```
-
-### SQL F — Overall vendor late-delivery percentage
-Feeds **GT #7**.
-
-```sql
-SELECT ROUND(AVG(CASE WHEN is_late THEN 1.0 ELSE 0.0 END) * 100, 1) AS vendor_late_delivery_pct
-FROM <catalog_name>.supplier_procurement.supplier_orders
-WHERE order_date >= DATE '2026-08-01'
-  AND order_date < DATE '2026-09-01'
-```
-
-### SQL G — Total vendor SLA penalties
-Feeds **GT #6**.
-
-```sql
-SELECT ROUND(SUM(penalty_amount), 1) AS total_vendor_sla_penalties
-FROM <catalog_name>.supplier_procurement.vendor_slas
-WHERE is_breached = true
-```
-
-### SQL H — Order-status breakdown for Western region
-Feeds **GT #22, #23, #24** and supports the root-cause narrative.
-
-```sql
-SELECT
-  order_status,
-  COUNT(*) AS order_count,
-  ROUND(SUM(total_amount), 2) AS total_revenue,
-  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS pct_of_orders
-FROM <catalog_name>.demand_analysis.sales_orders
-WHERE region = 'Western'
-  AND order_date >= DATE '2026-08-01'
-  AND order_date < DATE '2026-09-01'
-GROUP BY order_status
-ORDER BY order_count DESC
-```
-
-### SQL I — Cost of Disruption view
-Feeds **GT #9** directly and re-exposes the CoD components used by the executive narrative.
-
-```sql
-SELECT
-  region,
-  cancelled_revenue,
-  backordered_at_risk_revenue,
-  wasted_logistics_spend,
-  allocated_supplier_penalties,
-  total_cost_of_disruption
-FROM <catalog_name>.reporting.cost_of_disruption_by_region
-ORDER BY total_cost_of_disruption DESC
-```
-
-### SQL J — Executive KPI view
-Feeds **GT #3** and gives the current service-level baseline used against the quarterly policy target.
-
-```sql
-SELECT *
-FROM <catalog_name>.reporting.executive_kpis
-```
-
-### GT #10 is intentionally not SQL
-**Q3 service-level target = 95.0%** must come from the governed UC Page, not a table. This is the point of the demo: some business truth is policy, not data.
+Ground truth SQL patterns are embedded in the `00_run_all` assumption tester (cell 6) and the metric view definitions in cell 8 (Iteration 2). They do not need to be maintained separately in this README.
 
 ---
 
 ## Metric View Inventory
+
 
 Each metric view is a `CREATE VIEW ... WITH METRICS LANGUAGE YAML` object. In this demo, metric views are the authoritative semantic layer for KPIs that agents otherwise compute inconsistently from raw tables.
 
@@ -730,7 +560,6 @@ This lets the same governed object answer both the headline decline and the prod
 | `stockout_positions` | Count of stockout positions | Extra inventory stress context | Context | ✅ |
 | `unique_skus_in_stockout` | Count of unique stockout SKUs | Prompt asks for stocked-out SKUs | **#5** (Primary) | ✅ |
 | `avg_days_of_supply` | Average days of supply for below-safety items | Signals urgency of replenishment risk | **#19** (Indirect) | ✅ |
-| `warehouses_affected` | Number of affected warehouses | Helpful operational context | Context | ✅ |
 
 **Dimension / definition design**:
 * `region` is the governing slice.
@@ -774,136 +603,58 @@ The demo uses all 4 pillars of [Unity Catalog Semantics](https://learn.microsoft
 | UC Feature | What It Does | How It's Created | Iteration |
 |---|---|---|---|
 | **Column Comments** | Tells agents what columns mean ("total_amount = total order revenue in USD") | `ALTER TABLE ... SET COMMENT` (automated) | Iter 1 |
-| **Column Synonyms** | Maps business terms to technical names ("revenue" → total_amount) | Genie Agent `column_configs.synonyms` API (automated) | Iter 2 |
-| **Certified Queries** | Pre-built SQL patterns for complex calculations (MoM change, OTD rate) | Genie Agent `example_question_sqls` API (automated) | Iter 3 |
-| **Metric Views** | Pre-computed KPIs with unambiguous column names and `MEASURE()` syntax | `CREATE VIEW WITH METRICS LANGUAGE YAML` (automated) | Iter 4 |
-| **Domains** | Business-aligned grouping of data assets on the Discover page | Created from Databricks UI (manual) | Iter 5 |
-| **UC Pages** | Governed business definitions (policies, targets, formulas) that Genie One references authoritatively | Created from Databricks UI (manual) | Iter 5 |
-| **Certification** | Marks assets as trusted — steers Genie toward vetted sources | `SET TAG ... certification_status = 'certified'` (automated) | Iter 4 |
-| **Governed Tags** | Assigns assets to domains + adds metadata | `ALTER TABLE/SCHEMA SET TAGS` (automated) | Iter 4 |
+| **Certified Queries** | Pre-built SQL examples for disambiguation | Genie Agent instruction text (automated) | Iter 1 |
+| **Metric Views** | Pre-computed KPIs with `MEASURE()` syntax + Open Knowledge view | `CREATE VIEW WITH METRICS LANGUAGE YAML` (automated) | Iter 2 |
+| **Governed Tags** | Assigns assets to domains + adds certification metadata | `ALTER TABLE/SCHEMA SET TAGS` (automated) | Iter 2 |
+| **Domains** | Business-aligned grouping of data assets on the Discover page | Created from Databricks UI (manual) | Iter 3 |
+| **UC Pages** | Governed business definitions (policies, targets, formulas) that Genie One references authoritatively | Created from Databricks UI (manual) | Iter 3 |
+| **Certification** | Marks assets as trusted — steers Genie toward vetted sources | `SET TAG ... certification_status = 'certified'` (automated) | Iter 2 |
+| **UC Domain** | Business-aligned grouping of data assets | Created from Databricks UI (manual) | Iter 3 |
 
-### Domains (create from UI — Discover page)
+### Domain (create from UI — Discover page)
 
-Create these 5 domains in the Databricks Discover page. Each maps to one business team.
+Create a single domain on the **Discover** page that encompasses all supply chain schemas.
 
 | Domain Name | Description | Schemas to Assign |
 |---|---|---|
-| **Supply Chain — Demand** | Revenue, orders, demand forecasting, promotions | `GAP_Demo_Dev.demand_analysis` |
-| **Supply Chain — Inventory** | Stock levels, safety stock, stockouts, warehouse ops | `GAP_Demo_Dev.inventory_management` |
-| **Supply Chain — Logistics** | Shipment tracking, delivery performance, carrier management | `GAP_Demo_Dev.logistics_operations` |
-| **Supply Chain — Suppliers** | Supplier reliability, SLA compliance, procurement | `GAP_Demo_Dev.supplier_procurement` |
-| **Supply Chain — Executive** | Cross-domain KPIs, financial impact, targets | `GAP_Demo_Dev.reporting` |
+| **Supply Chain Operations** | End-to-end supply chain data across all business domains | All 5 schemas: `demand_analysis`, `inventory_management`, `logistics_operations`, `supplier_procurement`, `reporting` |
 
-**Governed tags** (automated in iteration notebooks):
-```sql
-ALTER SCHEMA GAP_Demo_Dev.demand_analysis SET TAGS ('domain' = 'Supply Chain — Demand');
-ALTER SCHEMA GAP_Demo_Dev.inventory_management SET TAGS ('domain' = 'Supply Chain — Inventory');
-ALTER SCHEMA GAP_Demo_Dev.logistics_operations SET TAGS ('domain' = 'Supply Chain — Logistics');
-ALTER SCHEMA GAP_Demo_Dev.supplier_procurement SET TAGS ('domain' = 'Supply Chain — Suppliers');
-ALTER SCHEMA GAP_Demo_Dev.reporting SET TAGS ('domain' = 'Supply Chain — Executive');
-```
+**Governed tags** are applied automatically by Iteration 2 (cell 8) to all 5 schemas. The single domain groups all supply chain assets together on the Discover page, making it easy for Genie to find related assets across domains.
 
-### UC Pages (create from UI — within each Domain)
+### UC Pages (create from UI — within the Domain)
 
-Create these Pages within their respective domains. Each defines a business concept that AI agents reference authoritatively.
+Create these 2 Pages within the "Supply Chain Operations" domain. Each defines business concepts that AI agents reference authoritatively.
 
-#### Page 1: "Quarterly Service-Level Targets" (Domain: Supply Chain — Executive)
+#### Page 1: "Fiscal Calendar & Targets"
 
-> **This Page is required for GT metric #10.** Without it, the agent cannot authoritatively answer "Are we going to miss our Q3 targets?" — it can compute the current service level (70.4%) from data, but the target (95%) is a business policy, not a data value.
+| Field | Value |
+|---|---|
+| **Domain** | Supply Chain Operations |
+| **Synonyms** | Fiscal and Fiscal Year |
+| **Description** | Fiscal Calendar for this domain of Supply chain |
+| **Definition** | This organization uses a **July fiscal year start**. Q1=Jul-Sep, Q2=Oct-Dec, **Q3=Jan-Mar** (NOT calendar Jul-Sep!), Q4=Apr-Jun. Current FY: FY2027 (Jul 2026 – Jun 2027). |
+| **Business Use** | Q3 service-level target = 95.0%. Reference date: September 1, 2026. "Last month" = August 2026. "Prior month" = July 2026. When a question mentions "August" without a year, ALWAYS use 2026. |
+| **Related Assets** | `fiscal_targets`, `executive_kpis` |
 
-```markdown
-# Quarterly Service-Level Targets (Q3 2026)
+> **This Page is required for GT tests G01/G02.** Without it, the agent cannot authoritatively answer "Are we going to miss our Q3 targets?" — it can compute the current service level from data, but the 95% target is a business policy, and Q3 = Jan-Mar (fiscal), NOT Jul-Sep (calendar).
 
-Approved by: VP Operations, effective July 1 2026.
+#### Page 2: "Cross-Domain Metric Definitions"
 
-| KPI | Q3 Target | Measurement |
-|---|---|---|
-| Overall service level (fill rate) | **95.0%** | service_level_pct in executive_kpis |
-| On-time delivery rate | **>80%** (i.e., late rate <20%) | Computed from shipments.is_late |
-| Stockout SKUs | **0** | COUNT(DISTINCT sku_id) WHERE stockout_flag |
-| Safety stock compliance | **>95%** of positions above safety stock | inventory_ledger.below_safety_stock_flag |
-| Supplier on-time rate | **>85%** | supplier_orders.is_late |
+| Field | Value |
+|---|---|
+| **Domain** | Supply Chain Operations |
+| **Description** | Cross-Domain Metric Definitions |
+| **Definition** | Resolves ambiguity between same-named metrics across domains. **Vendor Late Rate** = late POs / total POs per ORDER (= 75.0%). NEVER use COUNT(DISTINCT supplier_id) which gives per-vendor = 83.33%. "Percentage of vendors delivered late" is a BUSINESS TERM meaning per-order, not per-distinct-vendor. |
+| **Business Use** | CoD formula. OTD rate (94.57%) ≠ supplier late rate (75%). Fulfillment rate = only `Fulfilled` status (not `Partially_Fulfilled`). |
+| **Related Assets** | `delivery_performance_by_region`, `cost_of_disruption_by_region`, `supplier_performance_by_continent`, `revenue_comparison_by_region` |
 
-These targets apply company-wide. Regional targets follow the same thresholds.
-Q3 performance is measured as the average across July, August, and September 2026.
-```
-
-#### Page 2: "Cost of Disruption" (Domain: Supply Chain — Executive)
-
-```markdown
-# Cost of Disruption (CoD)
-
-A composite financial metric measuring the total monetary impact of supply chain failures.
-
-**Formula**: CoD = Cancelled Revenue + At-Risk Backorder Revenue + Wasted Freight + SLA Penalties
-
-| Component | Definition | Source |
-|---|---|---|
-| Cancelled Revenue | Revenue from orders with status = 'Cancelled' | demand_analysis.sales_orders |
-| At-Risk Backorder Revenue | Revenue from orders with status = 'Backordered' | demand_analysis.sales_orders |
-| Wasted Freight | Shipping cost for late deliveries | logistics_operations.shipments WHERE is_late |
-| SLA Penalties (allocated) | Penalty amounts from breached vendor SLAs, allocated by region proportional to late shipment share | supplier_procurement.vendor_slas WHERE is_breached |
-
-The pre-computed view `reporting.cost_of_disruption_by_region` implements this formula.
-CoD is reported per-region and company-wide.
-```
-
-#### Page 3: "Revenue" (Domain: Supply Chain — Demand)
-
-```markdown
-# Revenue
-
-In our supply chain data model, **revenue** refers to the `total_amount` column in `demand_analysis.sales_orders`.
-This represents the total order value in USD, regardless of fulfillment status.
-
-**Synonyms**: revenue, sales, total sales, order value, order revenue
-**Column**: `demand_analysis.sales_orders.total_amount`
-
-Month-over-month (MoM) revenue change = SUM(total_amount) for current month minus SUM(total_amount) for prior month.
-A negative MoM change means revenue **declined** (not increased).
-```
-
-#### Page 4: "On-Time Delivery" (Domain: Supply Chain — Logistics)
-
-```markdown
-# On-Time Delivery (OTD)
-
-OTD rate = percentage of shipments where `is_late = false`.
-Late delivery rate = percentage where `is_late = true` (inverse of OTD).
-
-**Formula**: `ROUND(AVG(CASE WHEN is_late = false THEN 1.0 ELSE 0.0 END) * 100, 1)`
-
-The pre-computed metric view `logistics_operations.delivery_performance_by_region` provides:
-- `on_time_delivery_rate` (OTD)
-- `late_delivery_rate` (inverse / supporting rate)
-- `avg_delay_days` (for late shipments only)
-
-**Important**: The shipments table uses `destination_region` (not `region`) for filtering.
-```
-
-#### Page 5: "Vendor vs Supplier" (Domain: Supply Chain — Suppliers)
-
-```markdown
-# Vendor / Supplier Terminology
-
-In our data model, "vendor" and "supplier" are synonymous. All supplier data lives in the
-`supplier_procurement` schema. Key tables:
-
-- `supplier_orders` — purchase orders to suppliers (has `is_late`, `lead_time_variance_days`)
-- `vendor_slas` — SLA compliance tracking (has `penalty_amount`, `is_breached`)
-- `suppliers` — master data (has `supplier_continent`, `country`, `risk_tier`)
-
-"Vendor SLA penalties" = `SUM(penalty_amount) FROM vendor_slas WHERE is_breached = true`
-"Vendor late delivery %" = `AVG(CASE WHEN is_late...) * 100 FROM supplier_orders`
-```
+> **Note**: UC Pages is Beta (UI-only, no API). Pages are created manually on the Discover page. The notebook documents their existence but does not create them programmatically. UC Pages feed directly into Genie's ontology — they are the governance layer that resolves business ambiguity (fiscal Q3 definition, vendor late rate semantics) without requiring agent instruction injection. The `fiscal_targets` reference table provides queryable data backing Page 1.
+>
+> **This Page is required for GT test F02.** Without it, the agent interprets "percentage of vendors delivered late" literally (per-vendor = 83.33%) instead of using the governed business definition (per-order = 75.0%).
 
 ### Certification (automated via SQL)
 
-All tables and views are certified in Iteration 4:
-```sql
-SET TAG ON TABLE catalog.schema.table_name `system`.`certification_status` = 'certified';
-```
-This steers Genie One toward these assets when resolving ambiguous questions.
+All metric views, schemas, and the Open Knowledge view are tagged with governed tags in Iteration 2 (cell 8). This steers Genie toward these assets when resolving ambiguous questions.
 
 ---
 
@@ -920,8 +671,8 @@ The image is the right mental model. To make this workshop complete, every layer
 | 1. Enrich metadata | dbxmetagen | Metadata-at-scale accelerator | Out of scope for this workshop; mention only as scale path | Explicitly excluded |
 | 2. Model business semantics | Metric Views for certified KPIs | Removes formula ambiguity | 4 UC Metric Views for revenue, delivery, inventory, supplier performance | In use |
 | 2. Model business semantics | Declared relationships (PK/FK) | Improves join-path selection | Add and document key relationships: `sales_orders.product_id → products.product_id`, `shipments.carrier_id → carriers.carrier_id`, `supplier_orders.supplier_id → suppliers.supplier_id`, etc. | Should add explicitly |
-| 2. Model business semantics | Domains | Organizes business assets the way users think | 5 Discover domains: Demand, Inventory, Logistics, Suppliers, Executive | Planned manual UI step |
-| 2. Model business semantics | Pages | Supplies policy and glossary facts not stored in tables | Q3 targets, Revenue, OTD, CoD, Vendor/Supplier terminology pages | Planned manual UI step |
+| 2. Model business semantics | Domains | Organizes business assets the way users think | 1 domain: "Supply Chain Operations" grouping all 5 schemas | Planned manual UI step |
+| 2. Model business semantics | Pages | Supplies policy and glossary facts not stored in tables | 2 pages: "Fiscal Calendar & Targets" and "Cross-Domain Metric Definitions" | Planned manual UI step |
 | 3. Curate context-rich assets | Certification / trusted assets | Steers Genie to governed sources first | Certification tags on metric views, CoD view, and vetted reporting assets | In use |
 | 3. Curate context-rich assets | Quality-checked assets | Gives a gold answer set | `expected_output_reference` + benchmark SQL inventory + benchmark table | In use |
 | 3. Curate context-rich assets | Instructions | Fixes decomposition and wording | Supervisor hardening and domain instructions | In use |
@@ -961,32 +712,30 @@ For this specific demo, the SQL is correct only when all of the following line u
 
 If any one of those is missing, Genie can still produce plausible SQL, but not necessarily the right SQL.
 
-## Updated Iteration Plan (00_run_all.py)
+## Iteration Plan (00_run_all.py)
 
-The master orchestrator runs 5 stages, each adding ONE category of UC feature:
+The master orchestrator notebook runs **3 inline iterations** (cells 7-9), each adding a distinct category of UC Semantics feature. A 40-test assumption tester runs after each iteration to measure progress.
 
-| Stage | Cell | UC Feature Added | Metrics Fixed | Expected Score |
+| Stage | Cell | UC Feature Added | Targets Fixed | Score |
 |---|---|---|---|---|
-| **Baseline** | Cell 6 | None — bare tables, no semantic enrichment | #8 (avg delay) | ~1-3/10 |
-| **Iter 1** | Cell 8 | Column/Table **Comments** (180+ descriptions) | #4 (safety stock), #5 (stockout SKUs) | ~3-5/10 |
-| **Iter 2** | Cell 9 | Column **Synonyms** (107 mappings) | #1 (revenue), #3 (fill rate), #6 (SLA penalties), #7 (vendor late) | ~5-7/10 |
-| **Iter 3** | Cell 10 | **Certified Queries** + Supervisor Hardening | #1 (MoM formula), #2 (OTD calc) | ~7-8/10 |
-| **Iter 4** | Cell 11 | **Metric Views** + CoD + Certification + Governed Tags | #2 (OTD via view), #4 (authoritative count), #9 (CoD) | ~9-10/10 |
-| **Iter 5** | (manual) | **UC Pages** + **Domains** (created from UI) | #10 (Q3 target — only answerable from Page) | 10/10 |
+| **Baseline** | Cell 6 | None — bare tables + lean agent instructions | — | **26/40 (65%)** |
+| **Iter 1** | Cell 7 | Column/table **comments** + **certified queries** in agent instructions | A04, D04, D06, F03, H01, H02, H03 | **33/40 (82%)** |
+| **Iter 2** | Cell 8 | 4 UC **Metric Views** (YAML) + **governed tags** + 1 **Open Knowledge** view (CoD) | E03, H05, H06, H07 | **37/40 (92%)** |
+| **Iter 3** | Cell 9 | Fiscal **reference table** + **temporal context** + UC **Domain & Pages** (UI) | F02, G01, G02 | **40/40 (100%)** |
+| **Final** | Cell 10 | Full 40-test rerun — proof of 40/40 | — | **40/40 (100%)** |
 
-**Key design principle**: Each iteration adds ONE type of UC feature. The progression proves that **data governance → better AI answers**.
+**Key design principle**: Each iteration adds ONE category of UC feature. The progression proves that **data governance → better AI answers**.
 
 ### What Each Iteration Does NOT Fix
 
 | Stage | What Still Fails | Why |
 |---|---|---|
-| Baseline | Almost everything — agents guess from column names alone | No semantic context |
-| After Iter 1 (Comments) | Revenue, fill rate, vendor terms, OTD, CoD | Comments explain columns but don't map business terms to technical names |
-| After Iter 2 (Synonyms) | MoM formula, OTD calculation, CoD | Agents know WHICH column but not HOW to compute derived metrics |
-| After Iter 3 (Certified SQL) | CoD, possibly OTD (complex inverse calc) | Cross-domain joins impossible for single-domain agents |
-| After Iter 4 (Metric Views) | Q3 target (95% is a policy, not data) | Business policies aren't in any table — need UC Pages |
+| Baseline | 14 failures — wrong tables, status ambiguity, cross-domain, business policy | No semantic context beyond column names |
+| After Iter 1 (Comments + Certified Queries) | F02 (vendor ambiguity), cross-domain queries (CoD, revenue at risk), Q3 targets | Comments + certified queries fix single-agent issues but can't span domains or resolve deep semantic ambiguity |
+| After Iter 2 (Metric Views + Open Knowledge) | F02 (vendor ambiguity), Q3 service-level target (95%) | Metric views fix formula + cross-domain, but policies aren't in any table and deep ambiguity remains |
+| After Iter 3 (UC Pages + Temporal Context) | Nothing — 40/40 | All failure modes resolved |
 
-> **Note**: All time-based metrics include actual month names (e.g., "Aug 2026 vs Jul 2026 MoM") generated dynamically via `DATE_FORMAT`. The demo works regardless of when it is run.
+> **Note**: All time-based metrics use a fixed reference date of September 1, 2026. "Last month" = August 2026, "prior month" = July 2026. The demo produces identical results every run.
 
 ## File Structure
 
@@ -1005,18 +754,20 @@ The master orchestrator runs 5 stages, each adding ONE category of UC feature:
     ├── 07_add_all_comments.py                   # 180+ column comments
     ├── 08_setup_genie_supervisor.py              # Raw baseline: 5 domain Genie Agents + Evaluator + Supervisor
     ├── 09_teardown.py                            # Full cleanup
-    ├── 10_demo_runner.py                         # Charts + supervisor invocation + scoring
-    ├── improvements/
-    │   ├── iteration_01_baseline_assessment.py    # Ground truth + error documentation
-    │   ├── iteration_02_certified_queries.py      # 20 certified SQL patterns
-    │   ├── iteration_03_column_synonyms.py        # 107 synonyms + enhanced instructions
-    │   ├── iteration_04_supervisor_hardening.py   # 7-section format + exact phrasings
-    │   ├── iteration_05_metric_views_glossary.py  # Metric views + UC tags + examples
-    │   └── iteration_06_cost_of_disruption.py     # Cross-domain CoD view + UC governance
+    ├── archive/                                  # Old iteration notebooks (no longer used)
+    │   ├── iteration_01_baseline_assessment.py
+    │   ├── iteration_02_certified_queries.py
+    │   ├── iteration_03_column_synonyms.py
+    │   ├── iteration_04_supervisor_hardening.py
+    │   ├── iteration_05_metric_views_glossary.py
+    │   ├── iteration_06_cost_of_disruption.py
+    │   └── 10_demo_runner.py
     └── notebooks/
-        ├── 00_run_all.py                          # One-click full pipeline orchestrator
+        ├── 00_run_all.py                          # Master orchestrator: teardown → build → 3 iterations → verify
         └── expected_output_reference.py           # Reference output for validation
 ```
+
+All iteration logic now runs **inline** in `00_run_all.py` (cells 7-9). The old standalone iteration notebooks have been moved to `src/archive/` for reference only — they are not executed.
 
 ## Data Determinism
 
