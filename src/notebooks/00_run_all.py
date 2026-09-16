@@ -1544,55 +1544,6 @@ comp_iter1 = run_comprehensive_benchmark("After Iteration 1 (comments + examples
 
 # COMMAND ----------
 
-# DBTITLE 1,Iteration 3 Approach: UC Pages + Temporal Context + Fiscal Calendar
-# MAGIC %md
-# MAGIC ## Iteration 3: UC Domain + UC Pages (Governance Layer)
-# MAGIC
-# MAGIC **UC Features Used:** UC Domain (Discover page), UC Pages (glossary / business definitions), Reference Table (`fiscal_targets` — queryable data backing the Page)
-# MAGIC
-# MAGIC **Goal:** Fix the remaining 3 failures — all caused by missing **business governance context** that doesn't live in any data table. Unlike Iterations 1-2 which enriched metadata and created views, this iteration relies entirely on the UC semantic governance layer: **Domains and Pages**.
-# MAGIC
-# MAGIC ### What This Fixes (3 final failures)
-# MAGIC
-# MAGIC | Failure | Root Cause | Fix (UC Feature) |
-# MAGIC | --- | --- | --- |
-# MAGIC | G01 | "Q3 service-level target" — 95% doesn't exist in any table; agent assumes calendar Q3 (Jul-Sep) | **UC Page 1**: Fiscal Calendar & Targets — defines Q3=Jan-Mar and target=95% |
-# MAGIC | G02 | "What is our Q3 target?" — same root cause as G01 | **UC Page 1**: same Page, same governance definition |
-# MAGIC | F02 | "% vendors delivered late" — word "vendors" pulls agent toward COUNT(DISTINCT supplier_id) = 83.33% instead of per-order 75% | **UC Page 2**: Cross-Domain Metric Definitions — governs that vendor late rate = per-ORDER |
-# MAGIC
-# MAGIC ### Key Design Decision: Pages, Not Agent Instructions
-# MAGIC
-# MAGIC Previous iterations taught agents through column comments (Iter 1) and metric views (Iter 2). Those are metadata enrichment — the agent still interprets the question and writes SQL.
-# MAGIC
-# MAGIC Iteration 3 is different: **UC Pages feed directly into Genie's ontology**. When a user asks "What is our Q3 target?", Genie consults the Page definition first, then queries the `fiscal_targets` table. When asked "% of vendors delivered late", Genie sees the Page's governed definition and uses the per-order formula — not because an instruction told it to, but because the governance layer resolved the ambiguity.
-# MAGIC
-# MAGIC This is the power of the semantic layer: **governance metadata resolves ambiguity, not prompt engineering.**
-# MAGIC
-# MAGIC ---
-# MAGIC
-# MAGIC ### `fiscal_targets` Reference Table
-# MAGIC
-# MAGIC This table provides **queryable data** backing UC Page 1. The Page defines the POLICY (Q3=Jan-Mar, target=95%); the table provides the DATA the agent queries.
-# MAGIC
-# MAGIC | fiscal_quarter | fiscal_year | calendar_months | service_level_target_pct |
-# MAGIC | --- | --- | --- | --- |
-# MAGIC | Q1 | 2027 | Jul 2026, Aug 2026, Sep 2026 | 92.0 |
-# MAGIC | Q2 | 2027 | Oct 2026, Nov 2026, Dec 2026 | 93.0 |
-# MAGIC | Q3 | 2027 | Jan 2027, Feb 2027, Mar 2027 | **95.0** |
-# MAGIC | Q4 | 2027 | Apr 2027, May 2027, Jun 2027 | 94.0 |
-# MAGIC
-# MAGIC ---
-# MAGIC
-# MAGIC ### UC Domain + Pages (Created on the Discover page)
-# MAGIC
-# MAGIC These persist through teardown (governance layer, not data layer):
-# MAGIC
-# MAGIC * **Domain:** "Supply Chain Operations" — groups all 5 schemas
-# MAGIC * **Page 1 — Fiscal Calendar & Targets:** July FY start. Q3=Jan-Mar (NOT calendar Jul-Sep). Q3 service-level target = 95.0%. Reference date: Sept 1, 2026. Last month = August 2026.
-# MAGIC * **Page 2 — Cross-Domain Metric Definitions:** Vendor Late Rate = late POs / total POs per ORDER (75.0%), NEVER per distinct vendor (83.33%). OTD rate (94.57%) ≠ supplier late rate (75%). CoD formula definition.
-
-# COMMAND ----------
-
 # DBTITLE 1,ITERATION 2: UC Metric Views + Governed Tags + Open Knowledge View → test_failing_metrics()
 # ============================================================
 # ITERATION 2: UC Metric Views + Governed Tags + Cross-Domain CoD
@@ -1895,6 +1846,55 @@ for agent_name, new_tables in agent_tables.items():
 
 print("\n\u2705 Iteration 2: 4 UC Metric Views + Governed Tags + 1 Open Knowledge View")
 iter2_passed, iter2_failed, iter2_errors = test_failing_metrics("After Iteration 2")
+
+# COMMAND ----------
+
+# DBTITLE 1,Iteration 3 Approach: UC Pages + Temporal Context + Fiscal Calendar
+# MAGIC %md
+# MAGIC ## Iteration 3: UC Domain + UC Pages (Governance Layer)
+# MAGIC
+# MAGIC **UC Features Used:** UC Domain (Discover page), UC Pages (glossary / business definitions), Reference Table (`fiscal_targets` — queryable data backing the Page)
+# MAGIC
+# MAGIC **Goal:** Fix the remaining 3 failures — all caused by missing **business governance context** that doesn't live in any data table. Unlike Iterations 1-2 which enriched metadata and created views, this iteration relies entirely on the UC semantic governance layer: **Domains and Pages**.
+# MAGIC
+# MAGIC ### What This Fixes (3 final failures)
+# MAGIC
+# MAGIC | Failure | Root Cause | Fix (UC Feature) |
+# MAGIC | --- | --- | --- |
+# MAGIC | G01 | "Q3 service-level target" — 95% doesn't exist in any table; agent assumes calendar Q3 (Jul-Sep) | **UC Page 1**: Fiscal Calendar & Targets — defines Q3=Jan-Mar and target=95% |
+# MAGIC | G02 | "What is our Q3 target?" — same root cause as G01 | **UC Page 1**: same Page, same governance definition |
+# MAGIC | F02 | "% vendors delivered late" — word "vendors" pulls agent toward COUNT(DISTINCT supplier_id) = 83.33% instead of per-order 75% | **UC Page 2**: Cross-Domain Metric Definitions — governs that vendor late rate = per-ORDER |
+# MAGIC
+# MAGIC ### Key Design Decision: Pages, Not Agent Instructions
+# MAGIC
+# MAGIC Previous iterations taught agents through column comments (Iter 1) and metric views (Iter 2). Those are metadata enrichment — the agent still interprets the question and writes SQL.
+# MAGIC
+# MAGIC Iteration 3 is different: **UC Pages feed directly into Genie's ontology**. When a user asks "What is our Q3 target?", Genie consults the Page definition first, then queries the `fiscal_targets` table. When asked "% of vendors delivered late", Genie sees the Page's governed definition and uses the per-order formula — not because an instruction told it to, but because the governance layer resolved the ambiguity.
+# MAGIC
+# MAGIC This is the power of the semantic layer: **governance metadata resolves ambiguity, not prompt engineering.**
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### `fiscal_targets` Reference Table
+# MAGIC
+# MAGIC This table provides **queryable data** backing UC Page 1. The Page defines the POLICY (Q3=Jan-Mar, target=95%); the table provides the DATA the agent queries.
+# MAGIC
+# MAGIC | fiscal_quarter | fiscal_year | calendar_months | service_level_target_pct |
+# MAGIC | --- | --- | --- | --- |
+# MAGIC | Q1 | 2027 | Jul 2026, Aug 2026, Sep 2026 | 92.0 |
+# MAGIC | Q2 | 2027 | Oct 2026, Nov 2026, Dec 2026 | 93.0 |
+# MAGIC | Q3 | 2027 | Jan 2027, Feb 2027, Mar 2027 | **95.0** |
+# MAGIC | Q4 | 2027 | Apr 2027, May 2027, Jun 2027 | 94.0 |
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### UC Domain + Pages (Created on the Discover page)
+# MAGIC
+# MAGIC These persist through teardown (governance layer, not data layer):
+# MAGIC
+# MAGIC * **Domain:** "Supply Chain Operations" — groups all 5 schemas
+# MAGIC * **Page 1 — Fiscal Calendar & Targets:** July FY start. Q3=Jan-Mar (NOT calendar Jul-Sep). Q3 service-level target = 95.0%. Reference date: Sept 1, 2026. Last month = August 2026.
+# MAGIC * **Page 2 — Cross-Domain Metric Definitions:** Vendor Late Rate = late POs / total POs per ORDER (75.0%), NEVER per distinct vendor (83.33%). OTD rate (94.57%) ≠ supplier late rate (75%). CoD formula definition.
 
 # COMMAND ----------
 
