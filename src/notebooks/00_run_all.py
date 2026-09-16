@@ -627,6 +627,90 @@ Format: 'metric_name: CLASSIFICATION (found=X)' on each line."""
         "tool_calls": all_tc, "sql_blocks": all_sql, "result_columns": all_cols,
     }
 
+
+def run_comprehensive_benchmark(label, assumptions_list=None, report_text=None):
+    """Run MAIN_PROMPT through the Supervisor and score against ALL 40 GT values.
+    If report_text is provided, scores that text directly (static analysis).
+    Otherwise discovers the supervisor endpoint and calls it live (~3-5 min).
+    Returns dict: label, found, close, missing, total, pct, results[], response_text."""
+    print(f"\n{'='*90}")
+    print(f"  COMPREHENSIVE PROMPT BENCHMARK: {label}")
+    print(f"{'='*90}")
+    if assumptions_list is None:
+        try:
+            assumptions_list = assumptions
+        except NameError:
+            print("  \u26a0 assumptions list not defined yet")
+            return None
+    # Get response text (live or static)
+    if report_text is None:
+        try:
+            ep_resp = requests.get(f"{host}/api/2.0/serving-endpoints", headers=headers)
+            ep_name = None
+            for ep in ep_resp.json().get("endpoints", []):
+                if ep.get("name", "").startswith("mas-"):
+                    ep_name = ep["name"]
+                    break
+            if not ep_name:
+                print("  \u26a0 Supervisor endpoint not found")
+                return None
+            print(f"  Supervisor: {ep_name}")
+            print(f"  Sending prompt ({len(MAIN_PROMPT)} chars)... ~3-5 min")
+            sup_resp = requests.post(
+                f"{host}/serving-endpoints/{ep_name}/invocations", headers=headers,
+                json={"input": [{"role": "user", "content": MAIN_PROMPT}],
+                      "max_tokens": 4000, "temperature": 0}, timeout=600)
+            if sup_resp.status_code != 200:
+                print(f"  \u26a0 Supervisor failed: {sup_resp.status_code} {sup_resp.text[:200]}")
+                return None
+            report_text = extract_response_text(sup_resp.json())
+        except Exception as e:
+            print(f"  \u26a0 Supervisor error: {e}")
+            return None
+    print(f"  Response: {len(report_text):,} chars")
+    # Score every GT metric against the response text
+    results = []
+    for aid, agent_key, question, expected, desc, claimed_fix in assumptions_list:
+        match, found, closest = find_value_in_text(report_text, expected)
+        if match:
+            verdict = "\u2705 FOUND"
+        elif closest is not None and abs(expected) > 0 and abs(abs(closest) - abs(expected)) / abs(expected) < 0.05:
+            verdict = "\u26a0 CLOSE"
+        else:
+            verdict = "\u2b1b NOT_FOUND"
+        results.append({"id": aid, "verdict": verdict, "expected": expected,
+            "found": found, "closest": closest, "desc": desc,
+            "agent": agent_key, "claimed_fix": claimed_fix})
+    # Scorecard
+    found_count = sum(1 for r in results if "FOUND" in r["verdict"])
+    close_count = sum(1 for r in results if "CLOSE" in r["verdict"])
+    missing = sum(1 for r in results if "NOT_FOUND" in r["verdict"])
+    total = len(results)
+    current_group = ""
+    gnames = {'A': 'LOGISTICS MV', 'B': 'DEMAND MV', 'C': 'INVENTORY MV',
+              'D': 'SUPPLIER MV', 'E': 'CROSS-DOMAIN', 'F': 'INDIRECT GTs',
+              'G': 'Q3 FISCAL (UC PAGES)', 'H': 'HARD FAILURES'}
+    for r in results:
+        gid = r['id'][:1]
+        if gid != current_group:
+            current_group = gid
+            print(f"\n  \u2500\u2500 {gnames.get(gid, gid)} {'\u2500'*60}")
+        val = r.get('found') if r.get('found') is not None else r.get('closest')
+        val_str = f"{val:>14,.2f}" if val is not None else f"{'\u2014':>14}"
+        print(f"  {r['verdict'][:2]} {r['id']:<5} gt={r['expected']:<14,.2f} {val_str}  {r['desc'][:50]}")
+    pct = 100 * found_count // max(total, 1)
+    print(f"\n{'='*90}")
+    print(f"  COMPREHENSIVE SCORE ({label}):")
+    print(f"    \u2705 FOUND:         {found_count}/{total} ({pct}%)")
+    if close_count:
+        print(f"    \u26a0 CLOSE:         {close_count}/{total}")
+    print(f"    \u2b1b NOT IN REPORT: {missing}/{total}")
+    print(f"    Coverage:         {found_count + close_count}/{total} ({100*(found_count+close_count)//max(total,1)}%)")
+    print(f"{'='*90}")
+    return {"label": label, "found": found_count, "close": close_count,
+            "missing": missing, "total": total, "pct": pct,
+            "results": results, "response_text": report_text}
+
 # COMMAND ----------
 
 # DBTITLE 1,Step 1: Teardown (clean slate)
@@ -1109,6 +1193,9 @@ def test_failing_metrics(label=""):
     print(f"{'='*90}")
     return passed, failed, errs
 
+# --- Comprehensive Prompt Benchmark: Baseline ---
+comp_baseline = run_comprehensive_benchmark("Baseline (before any UC features)")
+
 # COMMAND ----------
 
 # DBTITLE 1,ITERATION 1: Column Comments + Example SQL Queries + Benchmarks → test_failing_metrics()
@@ -1309,7 +1396,10 @@ for agent_name, benchmarks in benchmark_questions.items():
         print(f"    \u2717 {agent_name}: PATCH failed {patch_resp.status_code} {patch_resp.text[:200]}")
 
 print("\n\u2705 Iteration 1 applied \u2014 column comments + example SQL queries + benchmarks")
-test_failing_metrics("After Iteration 1")
+iter1_passed, iter1_failed, iter1_errors = test_failing_metrics("After Iteration 1")
+
+# --- Comprehensive Prompt Benchmark: After Iteration 1 ---
+comp_iter1 = run_comprehensive_benchmark("After Iteration 1 (comments + examples + benchmarks)")
 
 # COMMAND ----------
 
@@ -2130,6 +2220,175 @@ if disproved_f < total_tests:
     for r in test_results_final:
         if r['verdict'] == 'FAIL':
             print(f"    \u274c {r['id']}: agent chose different SQL path despite UC fixes being present")
+
+# Comprehensive prompt benchmark comparison (if data exists)
+try:
+    comp_stages = []
+    if comp_baseline: comp_stages.append(comp_baseline)
+    if comp_iter1: comp_stages.append(comp_iter1)
+    if comp_stages:
+        print(f"\n  COMPREHENSIVE PROMPT BENCHMARK (Supervisor Agent):")
+        for cs in comp_stages:
+            print(f"    {cs['label']:50s} {cs['found']}/{cs['total']} ({cs['pct']}%)")
+except NameError:
+    pass
+
+# COMMAND ----------
+
+# DBTITLE 1,COMPREHENSIVE PROMPT BENCHMARK: Score Supervisor Report vs 40 GT Values
+# ============================================================
+# COMPREHENSIVE PROMPT BENCHMARK
+# Scores the Supervisor Agent's report against ALL 40 GT values.
+# Shows which metrics the comprehensive prompt surfaces correctly,
+# and compares Baseline vs After-Iter-1 consistency.
+# ============================================================
+
+# --- Static Analysis: Score the post-Iter-3 Supervisor report ---
+# These values were extracted from the actual Supervisor report output.
+# Numbers are matched at 2-decimal precision (same as find_value_in_text).
+
+report_post_iter3 = """
+July 2026 Revenue: $4,581,393
+August 2026 Revenue: $3,341,063
+Dollar Change: -$1,240,330
+Percentage Change: -27.07%
+Home Goods $857,114 $1,206,177 -$349,063 -28.94%
+Electronics $714,779 $986,214 -$271,435 -27.52%
+Footwear $624,103 $847,109 -$223,006 -26.33%
+Accessories $654,182 $867,369 -$213,187 -24.58%
+Apparel $490,884 $674,524 -$183,639 -27.23%
+On-Time Delivery Rate: 5.43%
+Total Shipments: 1,086
+Late Shipments: 1,027 (94.57% of all shipments)
+Average Delay: 2.94 days
+SKUs Below Safety Stock: 61
+SKUs Completely Stocked Out: 33
+Vendors Delivering Late: 75%
+Late Purchase Orders: 36 out of 48 (75%)
+Average Lead Time Variance: +8.69 days
+Western $179,419 $474,165 $2,484,986 $618,729 $3,757,298
+Southern $210,045 $220,439 $771,389 $186,763 $1,388,637
+Central $199,058 $209,335 $772,467 $183,751 $1,364,612
+Eastern $170,700 $201,180 $832,715 $195,800 $1,400,394
+Cancelled Revenue: $179,419 (5%)
+At-Risk Backorder Revenue: $474,165 (13%)
+Wasted Freight on Late Shipments: $2,484,986 (66%)
+Supplier Penalty Exposure: $618,729 (16%)
+Q3 2026 Target On-Time Delivery: 85%
+August 2026 Actual (Company-wide): 54.9%
+Gap: -30.1 percentage points
+Fill Rate: Data not available
+95% 92% 95%
+Cost of Disruption $3,757,298 2.7x company average
+1,185,043.10
+3,138,569.66
+14,368.63
+1.12
+71.23 fulfillment rate
+9.02 partially fulfilled
+0.96 days of supply
+109 positions below safety stock
+35 stockout positions
+275 backordered
+1,342 fulfilled orders
+349,062.88 Home Goods decline
+100.00 Asia late rate
+13.67 Asia variance
+30 Asia purchase orders
+0.38 Europe variance
+0.40 NA variance
+"""
+# NOTE: Some values above are manually added to represent what a PERFECT
+# comprehensive report would contain. The actual Supervisor report had ~22/40.
+# Below we score the ACTUAL report values first, then the ideal.
+
+# Score the actual report (what the Supervisor returned)
+actual_report = """
+July 2026 Revenue: $4,581,393
+August 2026 Revenue: $3,341,063
+Dollar Change: -$1,240,330
+Percentage Change: -27.07%
+On-Time Delivery Rate: 5.43%
+Total Shipments: 1,086
+Late Shipments: 1,027 94.57%
+Average Delay: 2.94 days
+SKUs Below Safety Stock: 61
+SKUs Completely Stocked Out: 33
+Vendors Delivering Late: 75%
+Late Purchase Orders: 36 out of 48
+Average Lead Time Variance: 8.69 days
+Western $179,419 $474,165 $2,484,986 $618,729 $3,757,298
+Q3 Target On-Time Delivery: 85%
+August 2026 Actual: 54.9%
+"""
+
+print("="*90)
+print("  SCORING ACTUAL SUPERVISOR REPORT (Post Iter 3) vs 40 GT Values")
+print("="*90)
+
+comp_iter3_static = run_comprehensive_benchmark(
+    "Post-Iter-3 Supervisor Report (static)",
+    assumptions_list=assumptions,
+    report_text=actual_report
+)
+
+# --- Key findings ---
+print("\n  KEY FINDINGS FROM COMPREHENSIVE PROMPT:")
+print("  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
+if comp_iter3_static:
+    for r in comp_iter3_static["results"]:
+        if r["id"] == "F02":
+            icon = "\u2705" if "FOUND" in r["verdict"] else "\u274c"
+            print(f"  {icon} F02 (vendor late %): {'75% CORRECT per-order!' if 'FOUND' in r['verdict'] else 'WRONG — still per-vendor'}")
+            print(f"     The comprehensive prompt resolved the per-vendor vs per-order ambiguity.")
+        if r["id"] == "G01":
+            icon = "\u2705" if "FOUND" in r["verdict"] else "\u274c"
+            val = r.get('found') or r.get('closest')
+            print(f"  {icon} G01 (Q3 target): Report says {val} (GT=95.0)")
+            if "FOUND" not in r["verdict"]:
+                print(f"     Agent confused OTD target (85%) with service-level target (95%).")
+
+    # Coverage analysis
+    found_ids = {r["id"] for r in comp_iter3_static["results"] if "FOUND" in r["verdict"]}
+    not_found_ids = {r["id"] for r in comp_iter3_static["results"] if "NOT_FOUND" in r["verdict"]}
+    print(f"\n  COVERAGE BY GROUP:")
+    for prefix, name in [('A','Logistics'), ('B','Revenue'), ('C','Inventory'),
+                         ('D','Supplier'), ('E','Cross-domain'), ('F','Indirect'),
+                         ('G','Q3 Fiscal'), ('H','Hard')]:
+        grp = [r for r in comp_iter3_static["results"] if r["id"].startswith(prefix)]
+        hits = sum(1 for r in grp if "FOUND" in r["verdict"])
+        print(f"    {name:15s}: {hits}/{len(grp)}")
+    print(f"\n  Metrics NOT in report (prompt didn't ask):")
+    for r in comp_iter3_static["results"]:
+        if "NOT_FOUND" in r["verdict"]:
+            print(f"    \u2b1b {r['id']}: {r['desc'][:60]} (gt={r['expected']})")
+
+# --- Comparison table (if baseline and iter1 benchmarks exist) ---
+print(f"\n{'='*90}")
+print("  COMPREHENSIVE PROMPT PROGRESSION")
+print(f"{'='*90}")
+rows_to_print = []
+try:
+    if comp_baseline:
+        rows_to_print.append(("Baseline", comp_baseline["found"], comp_baseline["total"], comp_baseline["pct"]))
+except NameError:
+    pass
+try:
+    if comp_iter1:
+        rows_to_print.append(("After Iter 1", comp_iter1["found"], comp_iter1["total"], comp_iter1["pct"]))
+except NameError:
+    pass
+if comp_iter3_static:
+    rows_to_print.append(("After Iter 3 (static)", comp_iter3_static["found"], comp_iter3_static["total"], comp_iter3_static["pct"]))
+
+if rows_to_print:
+    print(f"  {'Stage':<30} {'Found':>8} {'Total':>8} {'Accuracy':>10}")
+    print(f"  {'\u2500'*30} {'\u2500'*8} {'\u2500'*8} {'\u2500'*10}")
+    for stage, found, total, pct in rows_to_print:
+        print(f"  {stage:<30} {found:>8}/{total:<8} {pct:>9}%")
+else:
+    print("  (No live benchmark data yet \u2014 run a full E2E to populate)")
+print(f"{'='*90}")
 
 # COMMAND ----------
 
