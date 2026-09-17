@@ -362,8 +362,8 @@ Before any UC Semantics features are applied, the 5 Genie Agents are tested with
 
 | Iteration | UC Feature Class | What It Does | Targets | Expected Outcome |
 | --- | --- | --- | --- | --- |
-| **1. Column Comments + Certified Queries** | Enterprise Context (Layer 1) | Table/column comments for disambiguation + certified SQL examples for ambiguous metrics | A04, D04, D06, F03, H01, H02, H03 | 33/40 → fixes wrong-table, status ambiguity, and date inference |
-| **2. UC Metric Views + Governed Tags + Open Knowledge** | Business Semantics (Layer 2) | 4 domain metric views (YAML), schema domain tags, 1 cross-domain Open Knowledge view (CoD) | E03, H05, H06, H07 | 37/40 → fixes cross-domain queries |
+| **1. Column Comments + Example SQL + Benchmarks** | Enterprise Context (Layer 1) | Table/column comments for disambiguation + Example SQL Queries (via Genie Examples tab) + Benchmark questions for ambiguous metrics | A04, D04, D06, F02, F03, H01, H02, H03 | 34/40 → fixes wrong-table, status ambiguity, and date inference |
+| **2. UC Metric Views + Governed Tags + Open Knowledge** | Business Semantics (Layer 2) | 4 domain metric views (YAML), schema domain tags, 1 cross-domain Open Knowledge view (CoD) | E03, H05, H06, H07 | 38/40 → fixes cross-domain queries |
 | **3. UC Pages + Domain + Temporal Context** | Glossary & Governance (Layer 2+3) | Fiscal calendar reference table, temporal context on all agents, UC Domain + Pages (created in UI) | F02, G01, G02 | 40/40 → fixes missing business definitions + remaining ambiguity |
 
 ### Key Insight
@@ -433,29 +433,29 @@ This creates a **deliberately minimal** baseline:
 
 #### Step 3: Progressive Improvement (the core demo)
 
-All 3 improvement iterations run **inline** in `src/notebooks/00_run_all.py` (cells 7-9). Run the full notebook end-to-end — do NOT run iteration cells in isolation (they depend on the baseline agents created in earlier cells).
+All 3 improvement iterations run **inline** in `src/notebooks/00_run_all.py` (cells 8, 10, 15). Run the full notebook end-to-end — do NOT run iteration cells in isolation (they depend on the baseline agents created in earlier cells).
 
 After each iteration cell, the notebook automatically runs `test_failing_metrics()` to show progress.
 
-##### Iteration 1: Column Comments + Example SQL Queries + Benchmarks (cell 7)
+##### Iteration 1: Column Comments + Example SQL Queries + Benchmarks (cell 8)
 
 **UC Features**: `ALTER TABLE SET COMMENT`, Example SQL Queries (`example_question_sqls` API → Genie Examples tab), Benchmarks (`benchmarks.questions` API → Genie Benchmarks tab)
 
 **What it fixes**: Table/column comments resolve table disambiguation (agent picks `supplier_orders` instead of `supplier_lead_times` for lead time variance). Example SQL Queries teach Genie correct SQL patterns for common questions via the structured Examples tab (stronger than embedding SQL in text instructions). Benchmark questions provide ground-truth Q&A pairs for evaluating accuracy via the Benchmarks tab. Fixes status-filter ambiguity ("Fulfilled" excludes "Partially_Fulfilled") and per-order vs per-vendor aggregation.
 
-**Targets**: A04, D04, D06, F03, H01, H02, H03 → **33/40 (82%)**
+**Targets**: A04, D04, D06, F02, F03, H01, H02, H03 → **34/40 (85%)**
 
-##### Iteration 2: UC Metric Views + Governed Tags + Open Knowledge View (cell 8)
+##### Iteration 2: UC Metric Views + Governed Tags + Open Knowledge View (cell 10)
 
 **UC Features**: `CREATE VIEW WITH METRICS LANGUAGE YAML`, `ALTER TABLE SET TAGS`, `ALTER SCHEMA SET TAGS`
 
 **What it fixes**: 4 UC Metric Views (`delivery_performance_by_region`, `revenue_comparison_by_region`, `inventory_safety_stock_metrics`, `supplier_performance_by_continent`) encode exact KPI formulas in governed column names. 1 Open Knowledge View (`cost_of_disruption_by_region`) bridges data from 4 domain schemas that no single agent can access alone. Governed tags and schema domain tags improve asset discovery.
 
-**Targets**: E03, H05, H06, H07 → **37/40 (92%)**
+**Targets**: E03, H05, H06, H07 → **38/40 (95%)**
 
 **Key insight**: Open Knowledge is a governed view that crosses domain boundaries — it exists because some business questions (like Cost of Disruption) require data from multiple schemas.
 
-##### Iteration 3: UC Domain + UC Pages — Governance Layer (cell 9)
+##### Iteration 3: UC Domain + UC Pages — Governance Layer (cell 15)
 
 **UC Features**: UC Domain (Discover page), UC Pages (glossary / business definitions), Reference Table (`fiscal_targets`)
 
@@ -491,8 +491,8 @@ Before running Iteration 3, create these on the **Discover** page:
 | Stage | What Changed | UC Feature | Score |
 |-------|-------------|-----------|-------|
 | **Baseline** | Bare tables + basic agent instructions, no semantic enrichment | None | **26/40 (65%)** |
-| **+ Iter 1: Comments + Certified Queries** | Column/table comments for disambiguation + certified SQL examples | `ALTER TABLE SET COMMENT` + instruction text | **33/40 (82%)** |
-| **+ Iter 2: Metric Views + Tags + Open Knowledge** | 4 UC Metric Views (YAML) + governed tags + CoD cross-domain view | `CREATE VIEW WITH METRICS LANGUAGE YAML` + `ALTER TABLE SET TAGS` | **37/40 (92%)** |
+| **+ Iter 1: Comments + Example SQL + Benchmarks** | Column/table comments for disambiguation + Example SQL Queries + Benchmarks | `ALTER TABLE SET COMMENT` + `example_question_sqls` API + `benchmarks` API | **34/40 (85%)** |
+| **+ Iter 2: Metric Views + Tags + Open Knowledge** | 4 UC Metric Views (YAML) + governed tags + CoD cross-domain view | `CREATE VIEW WITH METRICS LANGUAGE YAML` + `ALTER TABLE SET TAGS` | **38/40 (95%)** |
 | **+ Iter 3: UC Pages + Domain + Temporal** | Fiscal targets reference table + temporal context + UC Domain & Pages (UI) | UC Pages + Domains + reference tables | **40/40 (100%)** |
 
 ## Expected Output (after all 3 iterations)
@@ -576,7 +576,7 @@ The full test suite consists of **40 individual metric tests** organized into 8 
 
 See `00_run_all` cell 6 (Assumption Tester v3) for the complete test definitions and ground truth values.
 
-Ground truth SQL patterns are embedded in the `00_run_all` assumption tester (cell 6) and the metric view definitions in cell 8 (Iteration 2). They do not need to be maintained separately in this README.
+Ground truth SQL patterns are embedded in the `00_run_all` assumption tester (cell 6) and the metric view definitions in cell 10 (Iteration 2). They do not need to be maintained separately in this README.
 
 ---
 
@@ -725,7 +725,7 @@ Create these 2 Pages within the "Supply Chain Operations" domain. Each defines b
 
 ### Certification (automated via SQL)
 
-All metric views, schemas, and the Open Knowledge view are tagged with governed tags in Iteration 2 (cell 8). This steers Genie toward these assets when resolving ambiguous questions.
+All metric views, schemas, and the Open Knowledge view are tagged with governed tags in Iteration 2 (cell 10). This steers Genie toward these assets when resolving ambiguous questions.
 
 ---
 
@@ -785,15 +785,15 @@ If any one of those is missing, Genie can still produce plausible SQL, but not n
 
 ## Iteration Plan (00_run_all.py)
 
-The master orchestrator notebook runs **3 inline iterations** (cells 7-9), each adding a distinct category of UC Semantics feature. A 40-test assumption tester runs after each iteration to measure progress.
+The master orchestrator notebook runs **3 inline iterations** (cells 8, 10, 15), each adding a distinct category of UC Semantics feature. A 40-test assumption tester runs after each iteration to measure progress.
 
 | Stage | Cell | UC Feature Added | Targets Fixed | Score |
 |---|---|---|---|---|
 | **Baseline** | Cell 6 | None — bare tables + lean agent instructions | — | **26/40 (65%)** |
-| **Iter 1** | Cell 7 | Column/table **comments** + **certified queries** in agent instructions | A04, D04, D06, F03, H01, H02, H03 | **33/40 (82%)** |
-| **Iter 2** | Cell 8 | 4 UC **Metric Views** (YAML) + **governed tags** + 1 **Open Knowledge** view (CoD) | E03, H05, H06, H07 | **37/40 (92%)** |
-| **Iter 3** | Cell 9 | Fiscal **reference table** + **temporal context** + UC **Domain & Pages** (UI) | F02, G01, G02 | **40/40 (100%)** |
-| **Final** | Cell 10 | Full 40-test rerun — proof of 40/40 | — | **40/40 (100%)** |
+| **Iter 1** | Cell 8 | Column/table **comments** + **Example SQL Queries** + **Benchmarks** | A04, D04, D06, F02, F03, H01, H02, H03 | **34/40 (85%)** |
+| **Iter 2** | Cell 10 | 4 UC **Metric Views** (YAML) + **governed tags** + 1 **Open Knowledge** view (CoD) | E03, H05, H06, H07 | **38/40 (95%)** |
+| **Iter 3** | Cell 15 | Fiscal **reference table** + **temporal context** + UC **Domain & Pages** (UI) | F02, G01, G02 | **40/40 (100%)** |
+| **Final Proof** | Cell 16 | Full 40-test rerun — proof of 40/40 | — | **40/40 (100%)** |
 
 **Key design principle**: Each iteration adds ONE category of UC feature. The progression proves that **data governance → better AI answers**.
 
@@ -822,9 +822,12 @@ The master orchestrator notebook runs **3 inline iterations** (cells 7-9), each 
     ├── 04_generate_logistics_data.py             # 4 logistics tables (~38K rows)
     ├── 05_generate_supplier_data.py              # 5 supplier tables (~1.7K rows)
     ├── 06_create_reporting_views.py              # 4 cross-domain views
-    ├── 07_add_all_comments.py                   # 180+ column comments
+    ├── 07_add_all_comments.py                   # 180+ column comments (NOT run in pipeline — comments added inline in Iter 1)
     ├── 08_setup_genie_supervisor.py              # Raw baseline: 5 domain Genie Agents + Evaluator + Supervisor
     ├── 09_teardown.py                            # Full cleanup
+    ├── app/
+    │   ├── app.yaml                               # Databricks App config (Streamlit)
+    │   └── action_tracker_app.py                  # Action Intelligence Tracker Streamlit app
     ├── archive/                                  # Old iteration notebooks (no longer used)
     │   ├── iteration_01_baseline_assessment.py
     │   ├── iteration_02_certified_queries.py
@@ -835,10 +838,11 @@ The master orchestrator notebook runs **3 inline iterations** (cells 7-9), each 
     │   └── 10_demo_runner.py
     └── notebooks/
         ├── 00_run_all.py                          # Master orchestrator: teardown → build → 3 iterations → verify
+        ├── report_agent_functions.py              # Executive Report Agent: charts, HTML/PDF, email/Slack delivery
         └── expected_output_reference.py           # Reference output for validation
 ```
 
-All iteration logic now runs **inline** in `00_run_all.py` (cells 7-9). The old standalone iteration notebooks have been moved to `src/archive/` for reference only — they are not executed.
+All iteration logic now runs **inline** in `00_run_all.py` (cells 8, 10, 15). The old standalone iteration notebooks have been moved to `src/archive/` for reference only — they are not executed.
 
 ## Data Determinism
 
