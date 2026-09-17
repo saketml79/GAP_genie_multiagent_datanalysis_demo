@@ -459,6 +459,10 @@ if "user_decision" not in df_act.columns:
     df_act["user_decision"] = ""
 if "user_notes" not in df_act.columns:
     df_act["user_notes"] = ""
+# NaN from LEFT JOIN must become empty strings — float NaN is truthy in Python,
+# so str(NaN) becomes "nan" and breaks decision/note display logic.
+df_act["user_decision"] = df_act["user_decision"].fillna("")
+df_act["user_notes"] = df_act["user_notes"].fillna("")
 
 
 # ── SIDEBAR ──────────────────────────────────────────────────
@@ -588,7 +592,8 @@ with tab1:
             sc         = r.get("practicality_score", "")
             score_html = (f'<span style="font-size:.8rem;font-weight:800;color:var(--brand);">'
                           f'{float(sc):.0f}%</span>') if sc else ""
-            user_dec   = str(r.get("user_decision", "") or "").upper()
+            _raw_dec   = r.get("user_decision", "")
+            user_dec   = str(_raw_dec).upper() if pd.notna(_raw_dec) and _raw_dec else ""
             dec_pill   = _decision_pill(user_dec)
             decided_cls = "decided" if user_dec else ""
 
@@ -635,8 +640,9 @@ with tab1:
                     st.session_state[mode_key] = "REJECTED"; st.rerun()
                 if ba3.button("\u23f8  Defer", key=f"def_{action_id}", use_container_width=True):
                     st.session_state[mode_key] = "DEFERRED"; st.rerun()
-                if user_dec and r.get("user_notes"):
-                    ba4.caption(f'Note: {str(r.get("user_notes",""))[:80]}')
+                _raw_note = r.get("user_notes", "")
+                if user_dec and pd.notna(_raw_note) and _raw_note:
+                    ba4.caption(f'Note: {str(_raw_note)[:80]}')
             else:
                 label_map = {"APPROVED": "\u2713 Confirming Approval",
                              "REJECTED": "\u2717 Confirming Rejection",
@@ -788,7 +794,8 @@ with tab4:
             row = df_act[df_act["title"] == sel].iloc[0] if sel else None
             if row is not None:
                 action_id = str(row.get("action_id", ""))
-                user_dec  = str(row.get("user_decision", "") or "").upper()
+                _raw_dec  = row.get("user_decision", "")
+                user_dec  = str(_raw_dec).upper() if pd.notna(_raw_dec) and _raw_dec else ""
 
                 d_title = _esc(row.get('title', ''))
                 d_desc = _esc(row.get('description', ''))
@@ -860,7 +867,8 @@ with tab4:
                 st.markdown('<div class="section-kicker">Your Decision</div>', unsafe_allow_html=True)
 
                 if user_dec:
-                    note_s = _esc(str(row.get("user_notes", "") or ""))
+                    _raw_note_d = row.get("user_notes", "")
+                    note_s = _esc(str(_raw_note_d)) if pd.notna(_raw_note_d) and _raw_note_d else ""
                     dec_bg = _DEC_COLORS.get(user_dec, ("#374151", "#d1d5db"))[0]
                     dec_bd = _DEC_COLORS.get(user_dec, ("#374151", "#d1d5db"))[1]
                     dec_fg = _auto_fg(dec_bg)

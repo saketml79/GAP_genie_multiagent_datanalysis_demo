@@ -559,6 +559,80 @@ def create_all_charts(metrics: dict) -> dict:
 # charts, styled tables, and the Supervisor's narrative.
 # ============================================================
 
+def _md_to_html(text: str) -> str:
+    """Convert Supervisor markdown output to styled HTML (tables, bold, breaks)."""
+    lines = text.split('\n')
+    html_parts = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        # Detect markdown table: pipe-delimited rows
+        if '|' in stripped and stripped.startswith('|'):
+            table_lines = []
+            while i < len(lines) and '|' in lines[i].strip() and lines[i].strip().startswith('|'):
+                table_lines.append(lines[i].strip())
+                i += 1
+            html_parts.append(_md_table_to_html(table_lines))
+            continue
+        # Convert **bold**
+        line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
+        if not stripped:
+            html_parts.append('<div style="height:8px;"></div>')
+        else:
+            html_parts.append(f'<p style="margin:4px 0;">{line}</p>')
+        i += 1
+    return '\n'.join(html_parts)
+
+
+def _md_table_to_html(lines: list) -> str:
+    """Convert pipe-delimited markdown table lines to a styled HTML table."""
+    if not lines:
+        return ''
+    rows = []
+    for line in lines:
+        inner = line.strip().strip('|')
+        cells = [c.strip() for c in inner.split('|')]
+        rows.append(cells)
+    # Identify and remove separator rows (---|---|---)
+    separator_idx = set()
+    for idx, row in enumerate(rows):
+        if all(re.match(r'^[-:]+$', c) for c in row if c):
+            separator_idx.add(idx)
+    data_rows = [r for idx, r in enumerate(rows) if idx not in separator_idx]
+    if not data_rows:
+        return ''
+    html = '<table class="narr-table">'
+    html += '<thead><tr>'
+    for cell in data_rows[0]:
+        label = cell if cell else '#'
+        html += f'<th>{label}</th>'
+    html += '</tr></thead><tbody>'
+    for row in data_rows[1:]:
+        html += '<tr>'
+        for cell in row:
+            html += f'<td>{_fmt_narr_cell(cell)}</td>'
+        html += '</tr>'
+    html += '</tbody></table>'
+    return html
+
+
+def _fmt_narr_cell(val: str) -> str:
+    """Format narrative table cell: large numbers get commas."""
+    val = val.strip()
+    if not val:
+        return ''
+    try:
+        num = float(val)
+        if abs(num) >= 1000:
+            if num == int(num) and '.' not in val:
+                return f'{int(num):,}'
+            return f'{num:,.2f}'
+        return val
+    except ValueError:
+        return val
+
+
 def format_html_report(parsed: dict, charts: dict, supervisor_result: dict = None) -> str:
     """
     Assemble a standalone HTML executive report.
@@ -600,7 +674,14 @@ def format_html_report(parsed: dict, charts: dict, supervisor_result: dict = Non
   .kpi-card.warning {{ border-left-color: #ff9800; }}
   .chart-section {{ margin: 25px 0; }}
   .metadata {{ font-size: 11px; color: #999; margin-top: 40px; border-top: 1px solid #e0e0e0; padding-top: 10px; }}
-  .narrative {{ background: #fafafa; padding: 15px; border-radius: 8px; border: 1px solid #e0e0e0; margin: 15px 0; white-space: pre-wrap; font-size: 13px; line-height: 1.6; }}
+  .narrative {{ background: #fafafa; padding: 20px 24px; border-radius: 10px; border: 1px solid #e0e0e0; margin: 15px 0; font-size: 13px; line-height: 1.6; }}
+  .narrative strong {{ color: #1a237e; }}
+  .narr-table {{ width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12px; border-radius: 6px; overflow: hidden; }}
+  .narr-table th {{ background: #283593; color: #fff; padding: 8px 12px; text-align: left; font-weight: 600; font-size: 11px; letter-spacing: .03em; text-transform: uppercase; }}
+  .narr-table td {{ padding: 7px 12px; border-bottom: 1px solid #e8eaf6; color: #333; }}
+  .narr-table tbody tr:nth-child(even) {{ background: #f5f5f5; }}
+  .narr-table tbody tr:hover {{ background: #e8eaf6; }}
+  .narr-table td:first-child {{ color: #999; font-size: 11px; width: 30px; text-align: center; }}
 </style>
 </head>
 <body>
@@ -639,7 +720,7 @@ def format_html_report(parsed: dict, charts: dict, supervisor_result: dict = Non
 <div class="chart-section">{chart_img('service_level')}</div>
 
 <h2>Supervisor Agent Narrative</h2>
-<div class="narrative">{parsed.get('raw_text', 'No narrative available.').replace(chr(10), '<br>')}</div>
+<div class="narrative">{_md_to_html(parsed.get('raw_text', 'No narrative available.'))}</div>
 
 <div class="metadata">
   Endpoint: {supervisor_result.get('endpoint', 'N/A') if supervisor_result else 'N/A'} |

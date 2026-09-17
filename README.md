@@ -411,7 +411,8 @@ Open each notebook in the Databricks UI and **Run All**, in order:
 | 4 | `src/04_generate_logistics_data.py` | 4 tables: carriers, distribution_centers, shipments, transit_data | ~20s |
 | 5 | `src/05_generate_supplier_data.py` | 5 tables: suppliers, supplier_orders, lead_times, SLAs, procurement | ~20s |
 | 6 | `src/06_create_reporting_views.py` | 4 views: executive_kpis, regional_performance, revenue_trend, risk_scorecard | ~10s |
-| 7 | `src/07_add_all_comments.py` | Adds table + column comments (180+ columns) for Genie accuracy | ~30s |
+
+> **Note:** `07_add_all_comments.py` is deliberately **not** run at this stage. At baseline, tables have bare column names with no descriptions. Column and table comments are added inline during **Iteration 1** (via `ALTER COLUMN COMMENT` / `SET TBLPROPERTIES`) to demonstrate their impact on Genie accuracy.
 
 **Result**: 19 tables + 4 views across 5 schemas in `GAP_Demo_Dev`.
 
