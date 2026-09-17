@@ -1378,6 +1378,26 @@ example_sqls = {
             ],
             "usage_guidance": ["Compare Aug 2026 vs Jul 2026 revenue per product_family. Most negative = largest decline."]
         },
+    ],
+    "logistics": [
+        {
+            "id": uuid.uuid4().hex,
+            "question": ["What is the late delivery rate for Western region shipments last month?", "What percentage of Western region shipments were late last month?"],
+            "sql": [f"SELECT ROUND(AVG(CASE WHEN is_late = true THEN 1.0 ELSE 0.0 END) * 100, 2) as late_delivery_rate FROM {CAT}.logistics_operations.shipments WHERE destination_region = 'Western' AND ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'"],
+            "usage_guidance": ["ALWAYS filter by ship_date (not actual_delivery_date) for monthly shipment counts and rates. Use destination_region for region filtering. is_late = true means the shipment was late."]
+        },
+        {
+            "id": uuid.uuid4().hex,
+            "question": ["What is the average delay in days for Western region shipments last month?", "What is the average delay days for late deliveries in the West region?"],
+            "sql": [f"SELECT ROUND(AVG(CASE WHEN is_late THEN delay_days END), 2) as avg_delay_days FROM {CAT}.logistics_operations.shipments WHERE destination_region = 'Western' AND ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'"],
+            "usage_guidance": ["Average delay = AVG(delay_days) for late shipments only (CASE WHEN is_late THEN delay_days END). Do NOT add a separate delay_days IS NOT NULL filter. Filter by ship_date, not actual_delivery_date."]
+        },
+        {
+            "id": uuid.uuid4().hex,
+            "question": ["What is the on-time delivery rate for Western region last month?", "What is the OTD rate for the West?"],
+            "sql": [f"SELECT ROUND(AVG(CASE WHEN is_late = false THEN 1.0 ELSE 0.0 END) * 100, 2) as otd_rate FROM {CAT}.logistics_operations.shipments WHERE destination_region = 'Western' AND ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'"],
+            "usage_guidance": ["On-time delivery rate = percentage of shipments where is_late = false. Use ship_date for date filtering, destination_region for region."]
+        },
     ]
 }
 

@@ -4,7 +4,9 @@ command:
   - run
   - action_tracker_app.py
   - --server.port
-  - "8501"
+  - "8000"
+  - --server.address
+  - 0.0.0.0
 
 env:
   - name: CATALOG
