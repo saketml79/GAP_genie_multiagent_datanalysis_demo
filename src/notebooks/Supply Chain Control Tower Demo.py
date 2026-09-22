@@ -4807,10 +4807,10 @@ else:
 # MAGIC >
 # MAGIC > **Supervisor Agent ❌ NO tool type for UC Pages.** Supported tools: `genie_space`, `dashboard`, `uc_function`, `table`, `knowledge_assistant`, `serving_endpoint`, `vector_search_index`, `volume`, `app`, `uc_connection`, `uc_mcp`, `databricks_web_search`, `function`. No `page` or `domain` tool exists. There is also **no public REST API** for reading UC Page content programmatically (Pages is Beta, UI-only on the Discover page).
 # MAGIC >
-# MAGIC > **SQL Function as Agent Data Source ✅ WORKS via Agent UI, ❌ NOT via API.** Created `get_critical_delay_shipments()` returning multi-condition rule. Added to logistics agent via UI (Sources > SQL function).
+# MAGIC > **SQL Function as Agent Data Source ✅ WORKS via both Agent UI and Agent Mode API.** Created `get_critical_delay_shipments()` returning multi-condition rule. Added to logistics agent via UI (Sources > SQL function).
 # MAGIC > * **Agent UI**: Agent found the function, called it, read the definition (`delay_days >= 5 AND total_weight_kg > 800`), applied both conditions → **176** (correct!). Cited the function in its response.
-# MAGIC > * **Agent API** (`start-conversation`): Agent ignored the function, searched `delay_reason ILIKE '%critical delay%'` instead. Our test harness uses this API.
-# MAGIC > * The `serialized_space` API only exposes `tables` in `data_sources` — SQL functions can only be added via UI, not API.
+# MAGIC > * **Agent Mode API** (`/api/2.0/genie/agents/{id}/responses`): Also calls function correctly → **176**. Both channels work.
+# MAGIC > * The `serialized_space` API only exposes `tables` in `data_sources` — SQL functions can only be **added** via UI, not API. But once added, both UI and API can use them.
 # MAGIC >
 # MAGIC > **Workarounds** (all duplicate governance, defeating the single-source-of-truth purpose):
 # MAGIC > * Knowledge Assistant with Page content → add as Supervisor tool
@@ -4820,7 +4820,7 @@ else:
 # MAGIC >
 # MAGIC > **Bottom line:**
 # MAGIC > * **Genie One** is the only channel that natively consumes **UC Pages**.
-# MAGIC > * **SQL Functions** added as agent data sources work via the **Agent UI** (the best workaround for bridging Page definitions to agents). They do NOT work via the Agent API (`start-conversation`).
+# MAGIC > * **SQL Functions** added as agent data sources work via **both Agent UI and Agent Mode API** (the best workaround for bridging Page definitions to agents). They can only be **added** via UI, but once added, both channels use them.
 # MAGIC >
 # MAGIC > **What we test:**
 # MAGIC > * **G01/G02** → Fixed by adding the `fiscal_targets` TABLE to the Executive agent's data sources (cell 15, Step 2). The agent queries the table directly. UC Pages play no role — agents cannot read them.
@@ -4848,8 +4848,8 @@ else:
 # MAGIC
 # MAGIC > **Expected behavior after adding:**
 # MAGIC > * ✅ Agent UI queries: agent calls function, returns correct answer
-# MAGIC > * ❌ Agent API queries: agent may ignore function (platform gap)
-# MAGIC > * P01–P05 tests document this Genie UI vs API gap.
+# MAGIC > * ✅ Agent Mode API: also calls function correctly
+# MAGIC > * Once added as source, P01–P05 should pass in both channels.
 # MAGIC
 # MAGIC ---
 # MAGIC
