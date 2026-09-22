@@ -152,7 +152,7 @@ The diagram above shows how the **Genie Ontology** sits between AI consumers (Ge
 Under the Ontology, **Unity Catalog Semantics** provides the **user-defined** semantic objects that feed the Ontology:
 
 * **Domains**: Business-aligned organization of data assets. In this demo: a single "Supply Chain Operations" domain that groups all 5 schemas. Domains help Genie route questions to the right schema and help humans discover related assets on the Discover page.
-* **Glossary** (UC Pages): Governed business concept definitions — policies, formulas, terminology — that Genie references authoritatively. In this demo: "Fiscal Calendar & Targets" (Q3=Jan-Mar, target=95%) and "Cross-Domain Metric Definitions" (CoD formula, OTD vs supplier late rate). Pages answer questions that are intentionally NOT in any SQL table.
+* **Glossary** (UC Pages): Governed business concept definitions — policies, formulas, terminology — that Genie references authoritatively. In this demo: 7 Pages — "Fiscal Calendar & Targets" (Q3=Jan-Mar, target=95%), "Cross-Domain Metric Definitions" (CoD formula, OTD vs supplier late rate), and 5 domain-specific critical threshold definitions (P01-P05). **Important**: Genie One reads UC Pages; Genie Agents cannot. SQL Functions bridge the gap.
 * **Metrics** (Metric Views): Reusable KPI definitions with `MEASURE()` syntax. In this demo: `delivery_performance_by_region`, `revenue_comparison_by_region`, `inventory_safety_stock_metrics`, `supplier_performance_by_continent`. Metric Views eliminate formula ambiguity by encoding the exact business definition in the column name itself.
 
 The key insight: data alone is not enough. The UC Semantics layer teaches Genie **what the data means**, not just what it contains.
@@ -203,9 +203,9 @@ The table below lists every UC semantic layer feature this demo uses to fix Geni
 | # | Feature | API / SQL | What It Does in This Demo | Tests Fixed |
 | --- | --- | --- | --- | --- |
 | 9 | **UC Domain** | Created on the **Discover page** (UI) | Business-aligned organization of data assets. A single "Supply Chain Operations" domain groups all 5 schemas. Domains help Genie route questions to the right schema and help humans discover related assets. Persists through teardown — it IS the governance layer. | (routing + discovery) |
-| 10 | **UC Pages (Glossary)** | Created on the **Discover page** (UI), attached to the Domain | Governed business concept definitions for **humans** — policies, formulas, terminology. 7 Pages: Fiscal Calendar & Targets, Cross-Domain Metric Definitions, and 5 domain-specific "critical" threshold definitions. **Important**: Genie Agents cannot access UC Pages (proven). Pages serve as human-facing governance documentation; agent-facing thresholds are delivered via SQL Functions (#12) and reference tables (#11). | (human governance) |
+| 10 | **UC Pages (Glossary)** | Created on the **Discover page** (UI), attached to the Domain | Governed business concept definitions for **humans and Genie One** — policies, formulas, terminology. 7 Pages: Fiscal Calendar & Targets, Cross-Domain Metric Definitions, and 5 domain-specific critical threshold definitions (Logistics Risk Standards, Demand Quality Standards, Inventory Risk Classification, Supplier Quality Standards, Executive Alert Thresholds). **Important**: Genie Agents cannot access UC Pages (proven — agent stated it has no access). Genie One CAN read them (confirmed with citation). Pages serve as governance documentation; agent-facing thresholds are delivered via SQL Functions (#12) and reference tables (#11). | (human governance + Genie One) |
 | 11 | **Reference Table** | `CREATE TABLE ... fiscal_targets` + added to Executive agent data sources | Queryable data encoding fiscal calendar and service-level targets. The agent queries this table directly for Q3 target and fiscal quarter definitions. | G01, G02 |
-| 12 | **SQL Functions** (5) | `CREATE FUNCTION get_critical_*()` + added to agent data sources | Table-valued functions encoding domain-specific "critical" thresholds: `get_critical_delay_shipments()` (delay > 3 days), `get_critical_accuracy_forecasts()` (accuracy < 85%), `get_critical_supply_positions()` (days\_of\_supply < 14), `get_critical_quality_orders()` (quality < 70), `get_critical_disruption_regions()` (late\_shipments > 500). These are the agent-accessible equivalent of what UC Pages define for humans. | P01, P02, P03, P04, P05 |
+| 12 | **SQL Functions** (5) | `CREATE FUNCTION get_critical_*()` + added to agent data sources via UI | Table-valued functions encoding domain-specific multi-condition "critical" thresholds: `get_critical_delay_shipments()` (delay\_days >= 5 AND total\_weight\_kg > 800 → 176), `get_critical_accuracy_forecasts()` (quantity >= 8 AND unit\_price < 30 AND channel='Online' → 77), `get_critical_supply_positions()` (days\_of\_supply BETWEEN 1 AND 11 AND below\_safety\_stock\_flag=true AND on\_hand\_qty > 0 → 106), `get_critical_quality_orders()` (quality\_score < 75 AND lead\_time\_variance\_days > 12 → 11), `get_critical_disruption_regions()` (composite\_risk\_score < 55 AND lead\_time\_variance > 8 AND total\_penalty\_usd > 80000 → 3). Each function is designed to be **unguessable** — no single condition produces the correct count. SQL Functions work via both Agent UI and Agent Mode API once added as a data source. | P01, P02, P03, P04, P05 |
 
 #### Supporting Features (used throughout)
 
@@ -464,13 +464,15 @@ After each iteration cell, the notebook automatically runs `test_failing_metrics
 
 **Key insight**: Open Knowledge is a governed view that crosses domain boundaries — it exists because some business questions (like Cost of Disruption) require data from multiple schemas.
 
-##### Iteration 3: fiscal_targets + SQL Functions + UC Pages (cell 18)
+##### Iteration 3: fiscal_targets + SQL Functions + UC Pages (cells 18-19)
 
 **UC Features**: Reference Table (`fiscal_targets`), 5 SQL Functions for critical thresholds, UC Domain + UC Pages (Discover page, human governance)
 
 **What it fixes**: `fiscal_targets` TABLE provides queryable fiscal calendar and Q3 target (95%). SQL Functions (`get_critical_delay_shipments()`, etc.) encode domain-specific "critical" thresholds that agents would otherwise guess. UC Pages provide human-facing governance documentation on the Discover page. **Important**: Genie Agents cannot access UC Pages directly (proven — the agent stated it has no access). G01/G02 are fixed by the `fiscal_targets` table. P01-P05 are fixed by SQL Functions.
 
 **Targets**: G01, G02, P01-P05 → **45/45 (100%, fully deterministic)**
+
+**Cell split**: Cell 18 runs setup (creates SQL functions, adds fiscal_targets to agent, cleanup) then **stops** with a manual step prompt. Cell 19 runs the 45-test suite after the user has added SQL Functions to agents via the UI and created UC Pages.
 
 **Key insight**: The last mile of accuracy requires grounded governance assets (tables and SQL functions) that agents can actually query. UC Pages are valuable for human documentation but agents need SQL-queryable equivalents.
 
@@ -486,6 +488,13 @@ Before running Iteration 3, create these on the **Discover** page:
 * **Page 2**: "Cross-Domain Metric Definitions" — Definition: Vendor Late Rate = late POs / total POs per ORDER (75.0%), NEVER per distinct vendor (83.33%). OTD rate (94.57%) ≠ supplier late rate (75%). CoD formula. Fulfillment rate = only `Fulfilled` status, not `Partially_Fulfilled`.
 
   ![UC Page: Cross-Domain Metric Definitions](docs/images/4.png)
+
+* **Pages 3-7**: Domain-specific critical threshold definitions (see [UC Pages section](#uc-pages-create-from-ui--within-the-domain) for full details):
+  * Page 3: "Logistics Risk Standards" — `delay_days >= 5 AND total_weight_kg > 800` → 176 shipments
+  * Page 4: "Demand Quality Standards" — `quantity >= 8 AND unit_price < 30 AND channel='Online'` → 77 orders
+  * Page 5: "Inventory Risk Classification" — `days_of_supply BETWEEN 1 AND 11 AND below_safety_stock_flag=true AND on_hand_qty > 0` → 106 positions
+  * Page 6: "Supplier Quality Standards" — `quality_score < 75 AND lead_time_variance_days > 12` → 11 orders
+  * Page 7: "Executive Alert Thresholds" — `composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000` → 3 suppliers
 
 #### Step 4: Teardown (when done)
 
@@ -703,7 +712,7 @@ Create a single domain on the **Discover** page that encompasses all supply chai
 
 ### UC Pages (create from UI — within the Domain)
 
-Create 7 Pages within the "Supply Chain Operations" domain: 2 general + 5 domain-specific critical threshold definitions. Each defines business concepts that AI agents reference authoritatively.
+Create **7 Pages** within the "Supply Chain Operations" domain: 2 cross-domain (Fiscal Calendar, Cross-Domain Metrics) + 5 domain-specific critical threshold definitions (one per domain). The 2 cross-domain pages resolve ambiguity for humans and Genie One. The 5 domain-specific pages define multi-condition "critical" policies that are unguessable without the definition — these are bridged to agents via SQL Functions.
 
 #### Page 1: "Fiscal Calendar & Targets"
 
@@ -732,6 +741,70 @@ Create 7 Pages within the "Supply Chain Operations" domain: 2 general + 5 domain
 >
 > **This Page is required for GT test F02.** Without it, the agent interprets "percentage of vendors delivered late" literally (per-vendor = 83.33%) instead of using the governed business definition (per-order = 75.0%).
 
+#### Pages 3-7: Domain-Specific Critical Threshold Definitions
+
+Each domain defines a **named policy** with 2-3 conditions that no LLM can infer from general knowledge. Tests P01-P05 validate these. Without the Page (or its SQL Function equivalent), the agent must guess the threshold — and multi-condition rules are unguessable.
+
+#### Page 3: "Logistics Risk Standards" (schema: `logistics_operations`)
+
+| Field | Value |
+|---|---|
+| **Domain** | Supply Chain Operations |
+| **Synonyms** | logistics risk flag, flagged shipment |
+| **Definition** | A shipment is **flagged under Logistics Risk Standards** when `delay_days >= 5` **AND** `total_weight_kg > 800`. Both conditions must be met — heavy shipments with significant delay. Minor delays or lightweight shipments do not trigger the flag. |
+| **Business Use** | Flagged shipments require escalation. Use `delay_days >= 5 AND total_weight_kg > 800`. Neither condition alone is sufficient. |
+| **Related Assets** | `shipments` |
+
+> **Tests P01**: Without this definition, agent guesses single-condition thresholds (e.g., delay > 3, or delay > 7). Correct count = **176**.
+
+#### Page 4: "Demand Quality Standards" (schema: `demand_analysis`)
+
+| Field | Value |
+|---|---|
+| **Domain** | Supply Chain Operations |
+| **Synonyms** | demand anomaly, anomaly alert |
+| **Definition** | A Western region order **triggers a Demand Anomaly Alert** when `quantity >= 8` **AND** `unit_price < 30` **AND** `channel = 'Online'`. Identifies high-volume, low-price online orders signaling unusual demand patterns. |
+| **Business Use** | Use `quantity >= 8 AND unit_price < 30 AND channel = 'Online'` on `sales_orders` filtered to Western region, August 2026. All three conditions must be met. |
+| **Related Assets** | `sales_orders` |
+
+> **Tests P02**: Three conditions make guessing impossible. Correct count = **77**.
+
+#### Page 5: "Inventory Risk Classification" (schema: `inventory_management`)
+
+| Field | Value |
+|---|---|
+| **Domain** | Supply Chain Operations |
+| **Synonyms** | supply risk, inventory risk |
+| **Definition** | An inventory position is **classified as supply-risk** when `days_of_supply` is **BETWEEN 1 AND 11** AND `below_safety_stock_flag = true` AND `on_hand_qty > 0`. Captures items running low but not yet stocked out. |
+| **Business Use** | Use `days_of_supply BETWEEN 1 AND 11 AND below_safety_stock_flag = true AND on_hand_qty > 0`. All three conditions define the risk band. |
+| **Related Assets** | `inventory_ledger` |
+
+> **Tests P03**: Correct count = **106**.
+
+#### Page 6: "Supplier Quality Standards" (schema: `supplier_procurement`)
+
+| Field | Value |
+|---|---|
+| **Domain** | Supply Chain Operations |
+| **Synonyms** | quality minimum, procurement quality |
+| **Definition** | A supplier order **falls below the Procurement Quality Minimum** when `quality_score < 75` **AND** `lead_time_variance_days > 12`. Both marginal quality AND significant delivery variance must co-occur. Quality < 75 alone = 19 orders; adding ltv > 12 narrows to 11. |
+| **Business Use** | Use `quality_score < 75 AND lead_time_variance_days > 12`. Quality < 75 alone = 19 (wrong). ltv > 12 alone = wrong. Both needed → 11. |
+| **Related Assets** | `supplier_orders` |
+
+> **Tests P04**: Correct count = **11**.
+
+#### Page 7: "Executive Alert Thresholds" (schema: `reporting`)
+
+| Field | Value |
+|---|---|
+| **Domain** | Supply Chain Operations |
+| **Synonyms** | disruption threshold, executive alert |
+| **Definition** | A supplier **exceeds the Executive Disruption Threshold** when `composite_risk_score < 55` **AND** `lead_time_variance > 8` **AND** `total_penalty_usd > 80000`. Triple condition identifies suppliers with compounding risk. Each pair gives a different wrong answer (score+ltv=4, score+penalty=5, score alone=6). |
+| **Business Use** | Use `composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000` from `supply_chain_risk_scorecard`. All 3 needed → 3. |
+| **Related Assets** | `supply_chain_risk_scorecard` |
+
+> **Tests P05**: Correct count = **3**.
+
 ### Certification (automated via SQL)
 
 All metric views, schemas, and the Open Knowledge view are tagged with governed tags in Iteration 2 (cell 10). This steers Genie toward these assets when resolving ambiguous questions.
@@ -752,7 +825,7 @@ The image is the right mental model. To make this workshop complete, every layer
 | 2. Model business semantics | Metric Views for certified KPIs | Removes formula ambiguity | 4 UC Metric Views for revenue, delivery, inventory, supplier performance | In use |
 | 2. Model business semantics | Declared relationships (PK/FK) | Improves join-path selection | Add and document key relationships: `sales_orders.product_id → products.product_id`, `shipments.carrier_id → carriers.carrier_id`, `supplier_orders.supplier_id → suppliers.supplier_id`, etc. | Should add explicitly |
 | 2. Model business semantics | Domains | Organizes business assets the way users think | 1 domain: "Supply Chain Operations" grouping all 5 schemas | Planned manual UI step |
-| 2. Model business semantics | Pages | Supplies policy and glossary facts not stored in tables | 2 pages: "Fiscal Calendar & Targets" and "Cross-Domain Metric Definitions" | Planned manual UI step |
+| 2. Model business semantics | Pages | Supplies policy and glossary facts not stored in tables | 7 pages: Fiscal Calendar & Targets, Cross-Domain Metric Definitions, and 5 domain-specific critical threshold definitions (P01-P05) | Planned manual UI step |
 | 3. Curate context-rich assets | Certification / trusted assets | Steers Genie to governed sources first | Certification tags on metric views, CoD view, and vetted reporting assets | In use |
 | 3. Curate context-rich assets | Quality-checked assets | Gives a gold answer set | `expected_output_reference` + benchmark SQL inventory + benchmark table | In use |
 | 3. Curate context-rich assets | Instructions | Fixes decomposition and wording | Supervisor hardening and domain instructions | In use |
@@ -794,15 +867,19 @@ If any one of those is missing, Genie can still produce plausible SQL, but not n
 
 ## Iteration Plan (00_run_all.py)
 
-The master orchestrator notebook runs **3 inline iterations** (cells 9, 12, 18), each adding a distinct category of UC Semantics feature. A 45-test assumption tester runs after each iteration to measure progress.
+The master orchestrator notebook runs **3 inline iterations** (cells 9, 12, 18-19), each adding a distinct category of UC Semantics feature. A 45-test assumption tester runs after each iteration to measure progress. After the final iteration, cells 20-23 provide deep analysis of reliability, robustness, and provenance.
 
 | Stage | Cell | UC Feature Added | Targets Fixed | Score |
 |---|---|---|---|---|
-| **Baseline** | Cell 6 | None — bare tables + lean agent instructions | — | **~30-31/45 (~67%, non-deterministic)** |
+| **Baseline** | Cell 6 | None — bare tables + lean agent instructions | — | **~29-31/45 (~67%, non-deterministic)** |
 | **Iter 1** | Cell 9 | Column/table **comments** + **Example SQL Queries** + **Benchmarks** | A04, D04, D06, F02, F03, H01, H02, H03 | **~35-37/45 (~78%)** |
 | **Iter 2** | Cell 12 | 4 UC **Metric Views** (YAML) + **governed tags** + 1 **Open Knowledge** view (CoD) | E03, H05, H06, H07 | **~38-40/45 (~87%)** |
-| **Iter 3** | Cell 18 | `fiscal_targets` table + 5 **SQL Functions** + UC **Domain & Pages** (UI) | G01, G02, P01-P05 | **45/45 (100%, deterministic)** |
-| **Final Proof** | Cell 20 | Full 45-test rerun — proof of 45/45 | — | **45/45 (100%)** |
+| **Iter 3 Setup** | Cell 18 | `fiscal_targets` table + 5 **SQL Functions** + UC **Domain & Pages** (UI) | G01, G02, P01-P05 | (setup only — stops for manual step) |
+| **Iter 3 Test** | Cell 19 | Full 45-test rerun with SQL Functions active | — | **45/45 (100%, deterministic)** |
+| **Visual** | Cell 20 | Provenance analysis + confidence distribution charts | — | Dashboard |
+| **Deep Reliability** | Cell 21 | SQL consistency, value stability, flip analysis, production readiness | — | Analysis |
+| **Robustness Test** | Cell 22 | 10 hardest questions × 3 rephrased variations = 30 API calls | — | Reliability + Dependability scores |
+| **Comp Benchmark** | Cell 23 | Single executive prompt to Supervisor — scores coverage | — | Indirect improvement tracking |
 
 **Key design principle**: Each iteration adds ONE category of UC feature. The progression proves that **data governance → better AI answers**.
 
@@ -868,8 +945,59 @@ Edit `databricks.yml` to set per-environment values:
 - `catalog_name`: Unity Catalog name (default: `GAP_Demo_Dev`)
 - `warehouse_id`: SQL Warehouse ID for Genie Agents
 
+## Provenance & Classification System
+
+Every test result includes **provenance** — which UC semantic feature the agent actually used to get its answer. This makes the demo's thesis visible: accuracy improved BECAUSE the agent used the governed asset we provided.
+
+### Dynamic Classification
+
+The `analyze_agent_sql()` function parses agent SQL and narration to classify HOW the agent arrived at each answer. Classification is **fully dynamic** — no per-test hardcoding. Priority cascade:
+
+| Priority | Label | Detection | Meaning |
+|---|---|---|---|
+| 1 | METRIC_VIEW | SQL references a governed metric view table | Agent used a UC Metric View (Iter 2) |
+| 2 | SQL_FUNCTION | SQL references `get_critical_*()` function | Agent used a SQL Function (Iter 3) |
+| 3 | REFERENCE_TABLE | SQL references `fiscal_targets` | Agent used the reference table (Iter 3) |
+| 4 | GUESSED_THRESHOLD | WHERE clause has invented numeric cutoff | Agent guessed a threshold not from any UC feature |
+| 5 | COLUMN_COMMENT | Narration says "column comment" / "description" | Agent cited column metadata (Iter 1) |
+| 6 | EXAMPLE_GUIDED | Narration says "example query" / "certified query" | Agent followed an Example SQL (Iter 1) |
+| 7 | DERIVED | SQL has multiple aggregations / CASE WHEN / division | Agent derived a complex formula from raw tables |
+| 8 | SYNONYM | Question says "revenue" but SQL uses `total_amount` | Agent resolved a vocabulary synonym |
+| 9 | UNAMBIGUOUS | Simple column query on base table | Direct column lookup, no UC feature needed |
+| 10 | NARRATION | No SQL returned | Agent answered from text only |
+
+### Reasoning Confidence Labels
+
+Each provenance tier maps to a **confidence label** indicating reproducibility:
+
+| Confidence | Meaning | Provenance Tiers |
+|---|---|---|
+| **DETERMINISTIC** | Grounded in governed asset — repeatable across runs | Iter 2 (Metric Views), Iter 3 (SQL Functions, Reference Tables) |
+| **HEURISTIC** | Guided by metadata — likely repeatable | Iter 1 (Column Comments, Example SQL) |
+| **BASELINE** | Raw table interpretation — may vary across runs | Baseline (no UC feature used) |
+| **GUESSED** | Agent invented the answer — unreliable | Guessed thresholds, no UC feature available |
+
+Visual cells (7, 10, 13, 20) display two-panel charts: (1) Provenance tier distribution, (2) Reasoning Confidence distribution.
+
+### Reliability & Robustness Analysis (Cells 21-22)
+
+**Cell 21 (Deep Reliability)** analyzes existing test results across all iterations (zero API calls):
+* SQL pattern consistency — same SQL structure across iterations?
+* Provenance stability — does the agent converge to governed assets?
+* Value reliability — does the returned value stabilize?
+* Per-tier production readiness matrix
+* Flip analysis — which tests changed verdict between iterations?
+
+**Cell 22 (Robustness Test)** sends 10 hardest questions × 3 rephrased variations (30 API calls):
+* Tests whether agent answers are robust to vocabulary changes
+* Computes per-test **Reliability** (correct answer regardless of phrasing) and **Dependability** (same SQL approach regardless of phrasing)
+* Key finding: DETERMINISTIC-tier tests are robust to rephrasing; BASELINE-tier tests break when vocabulary changes
+
 ## Technical Notes
 
+- **Agent Mode API**: The test harness uses `POST /api/2.0/genie/agents/{space_id}/responses` with SSE streaming (not the older `start-conversation` API). Returns SQL queries, function call outputs, and narration text in a single streamed response.
+- **Genie One vs Genie Agents (PROVEN)**: UC Pages are consumed by **Genie One** (confirmed: 402 response with citation to "Logistics Risk Standards" Page). Genie Agents **cannot** read UC Pages (agent stated: "I don't have direct access to those pages in this context"). Supervisor Agent has no `page` or `domain` tool type. There is no public REST API for reading UC Page content. This is why SQL Functions (feature #12) exist — they bridge Page-defined thresholds to agents.
+- **SQL Functions work via both channels**: Once added as a data source via the Agent UI, SQL Functions work via both the Agent UI and the Agent Mode API. The `serialized_space` API cannot add SQL functions programmatically — UI-only for adding, but both channels can call them.
 - **"Last month" = fixed August 2026 calendar month in this workshop**: The demo is deterministic. Data generation, views, certified queries, and benchmark SQL use the fixed anchor `DATE '2026-09-01'` to represent last month = August 2026 and prior month = July 2026. Never rolling 30-day windows.
 - **Genie API race condition**: After creating a Genie Agent, tables may not persist on the first PATCH. Scripts include retry logic.
 - **Metric ambiguity**: When base tables have multiple rows per entity (e.g., one SKU in 3 warehouses), `COUNT(*)` and `COUNT(DISTINCT)` give different answers. Metric views resolve this by encoding the exact definition in the column name.
