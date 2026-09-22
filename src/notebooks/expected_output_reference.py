@@ -17,9 +17,9 @@
 # MAGIC
 # MAGIC **Notebook structure:**
 # MAGIC * **Sections 1–9**: Queries grouped by domain (demand, inventory, logistics, suppliers, executive) with findings, root cause analysis, and the expected Supervisor report format
-# MAGIC * **Section 10**: **Ground Truth Query Reference** — master mapping table (40 test IDs → query locations) + SQL queries for metrics not already covered in Sections 1–9
+# MAGIC * **Section 10**: **Ground Truth Query Reference** — master mapping table (45 test IDs → query locations, including P01-P05 critical thresholds) + SQL queries for metrics not already covered in Sections 1–9
 # MAGIC * **Section 11**: Comprehensive Prompt Benchmark coverage (which metrics the Supervisor surfaces vs misses)
-# MAGIC * **Section 12**: Iteration progression summary (baseline 67% → 100%)
+# MAGIC * **Section 12**: Iteration progression summary (baseline ~30-31/45 non-deterministic → 45/45 deterministic)
 # MAGIC
 # MAGIC See `00_run_all` for the automated test runner (Assumption Tester v3) that uses these values.
 
@@ -975,7 +975,7 @@ df_h05.display()
 # MAGIC ---
 # MAGIC ## 11. Comprehensive Prompt Benchmark — Supervisor Agent Scoring
 # MAGIC
-# MAGIC The comprehensive prompt is a **single, multi-part business question** sent to the **Supervisor Agent**, which orchestrates all 5 domain Genie agents. Unlike the 40 individual tests (one question → one agent), this tests how well the Supervisor synthesizes a complete report.
+# MAGIC The comprehensive prompt is a **single, multi-part business question** sent to the **Supervisor Agent**, which orchestrates all 5 domain Genie agents. Unlike the 45 individual tests (one question → one agent), this tests how well the Supervisor synthesizes a complete report.
 # MAGIC
 # MAGIC ### The Prompt
 # MAGIC
@@ -983,7 +983,7 @@ df_h05.display()
 # MAGIC
 # MAGIC ### Scoring Methodology
 # MAGIC
-# MAGIC The Supervisor response is plain text (not structured). Scoring uses `find_value_in_text()` — the same 2-decimal matcher used for individual tests — to search the response for each of the 40 GT values.
+# MAGIC The Supervisor response is plain text (not structured). Scoring uses `find_value_in_text()` — the same 2-decimal matcher used for individual tests — to search the response for each of the 45 GT values.
 # MAGIC
 # MAGIC * **FOUND**: `round(abs(number_in_report), 2) == round(abs(GT_value), 2)`
 # MAGIC * **CLOSE**: Within 5% but not exact
@@ -1051,24 +1051,26 @@ df_h05.display()
 # MAGIC ---
 # MAGIC ## 12. Iteration Progression Summary
 # MAGIC
-# MAGIC This table shows how UC Semantic features progressively improve Genie accuracy across the 40 individual tests.
+# MAGIC This table shows how UC Semantic features progressively improve Genie accuracy across the 45 individual tests.
 # MAGIC
-# MAGIC ### Individual Tests (40 questions → 40 agents)
+# MAGIC ### Individual Tests (45 questions → domain agents)
 # MAGIC
 # MAGIC | Stage | PASS | Total | Accuracy | What Changed |
 # MAGIC | --- | --- | --- | --- | --- |
-# MAGIC | **Baseline** | ~27 | 40 | ~67% | Bare tables, no comments, no views, no tags |
-# MAGIC | **After Iter 1** | ~34 | 40 | ~85% | Column comments, Example SQL Queries (`example_question_sqls` API), Benchmarks (`benchmarks` API) |
-# MAGIC | **After Iter 2** | ~37 | 40 | ~92% | UC Metric Views (4), Governed Tags, Open Knowledge View (CoD) |
-# MAGIC | **After Iter 3** | ~40 | 40 | ~100% | UC Domain + UC Pages (Fiscal Calendar, Metric Definitions), `fiscal_targets` reference table |
+# MAGIC | **Baseline** | ~30-31 | 45 | ~67-69% (non-deterministic) | Bare tables, no comments, no views, no tags. Agent guesses from column/table names — answers vary across runs. |
+# MAGIC | **After Iter 1** | ~35-37 | 45 | ~78-82% | Column comments, Example SQL Queries, Benchmarks. Steers agent to correct tables. |
+# MAGIC | **After Iter 2** | ~38-40 | 45 | ~84-89% | UC Metric Views (4), Governed Tags, Open Knowledge View (CoD). Pre-computed KPIs eliminate formula guessing. |
+# MAGIC | **After Iter 3** | 45 | 45 | 100% (fully deterministic) | `fiscal_targets` table, 5 SQL Functions, UC Domain + Pages. Every answer grounded in governed asset. |
 # MAGIC
 # MAGIC ### UC Features Used Per Iteration
 # MAGIC
 # MAGIC | Iteration | UC Features | Tests Fixed |
 # MAGIC | --- | --- | --- |
-# MAGIC | 1 | `ALTER TABLE SET COMMENT`, `example_question_sqls` API (Genie Examples tab), `benchmarks` API (Genie Benchmarks tab) | A04, D04, D06, F03, H01, H02, H03 |
+# MAGIC | 1 | `ALTER TABLE SET COMMENT`, `example_question_sqls` API (Genie Examples tab), `benchmarks` API (Genie Benchmarks tab) | A04, D04, D06, F02, F03, H01, H02, H03 |
 # MAGIC | 2 | `CREATE VIEW WITH METRICS LANGUAGE YAML`, `ALTER TABLE SET TAGS`, `ALTER SCHEMA SET TAGS`, Open Knowledge View | E03, H05, H06, H07 |
-# MAGIC | 3 | UC Domain (Discover page), UC Pages (glossary), `fiscal_targets` reference table | F02, G01, G02 |
+# MAGIC | 3 | `fiscal_targets` table, 5 SQL Functions (`get_critical_*`), UC Domain + Pages (Discover page) | G01, G02, P01, P02, P03, P04, P05 |
+# MAGIC
+# MAGIC **Key finding: Genie Agents CANNOT access UC Pages.** G01/G02 are fixed by the `fiscal_targets` TABLE. P01-P05 are fixed by SQL Functions. UC Pages serve as human-facing governance documentation only.
 # MAGIC
 # MAGIC ### The Six Foundation Layers Demonstrated
 # MAGIC

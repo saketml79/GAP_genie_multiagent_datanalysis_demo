@@ -179,6 +179,21 @@ spaces_config = {
     },
 }
 
+# Append provenance requirement to ALL agent instructions.
+# This makes agents self-document their reasoning: which tables/columns they used,
+# and whether they assumed any thresholds not defined in the data.
+# The [PROVENANCE:] tag is parsed by parse_provenance() in 00_run_all for classification.
+PROVENANCE_SUFFIX = (
+    "\n\n"
+    "PROVENANCE REQUIREMENT: After every analytical answer, append exactly one line:\n"
+    "[PROVENANCE: tables={table_names}, key_columns={column_names}, "
+    "assumed_thresholds={none_or_values}, method={metric_view|base_table|computed|assumed_definition}]\n"
+    "If you assumed any threshold or business definition not found in the data, say so explicitly."
+)
+for _space_name in spaces_config:
+    spaces_config[_space_name]["instructions"] += PROVENANCE_SUFFIX
+print(f"Provenance requirement appended to {len(spaces_config)} agent instructions")
+
 # COMMAND ----------
 
 # MAGIC %md

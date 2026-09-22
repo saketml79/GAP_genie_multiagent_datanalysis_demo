@@ -19,20 +19,23 @@ Using a realistic supply chain scenario with 23 tables across 5 business domains
 
 ##### Ground Truth: Demo Proxy for Real-World Feedback
 
-> In this demo, we use a **benchmark ground-truth framework** — **40 metrics** across 8 groups — to objectively measure whether the agents are generating the right SQL and returning the right numbers. Each metric is tested individually by sending a targeted question to the relevant domain agent and comparing the response against a known ground-truth value at exact 2-decimal precision.
+> In this demo, we use a **benchmark ground-truth framework** — **45 metrics** across 9 groups — to objectively measure whether the agents are generating the right SQL and returning the right numbers. Each metric is tested individually by sending a targeted question to the relevant domain agent and comparing the response against a known ground-truth value at exact 2-decimal precision.
 >
 > | Group | Count | What It Tests |
 > | --- | --- | --- |
-> | A: Logistics MV | 6 | OTD rate, late rate, avg delay, shipment counts, wasted freight |
-> | B: Demand MV | 4 | Revenue (Aug vs Jul), dollar change, % change |
-> | C: Inventory MV | 5 | Below safety stock, stockouts, days of supply |
-> | D: Supplier MV | 7 | PO counts, late %, lead time variance (overall + by continent) |
+> | A: Logistics | 6 | OTD rate, late rate, avg delay, shipment counts, wasted freight |
+> | B: Demand | 4 | Revenue (Aug vs Jul), dollar change, % change |
+> | C: Inventory | 5 | Below safety stock, stockouts, days of supply |
+> | D: Supplier | 7 | PO counts, late %, lead time variance (overall + by continent) |
 > | E: Cross-domain | 3 | Fill rate, SLA penalties, Cost of Disruption |
 > | F: Indirect / Ambiguity | 6 | Region synonyms, per-order vs per-vendor, status filters |
+> | G: Q3 Fiscal | 2 | Q3 service-level target (not in any base table) |
 > | H: Hard failures | 7 | Wrong table, cross-domain joins, derived ratios |
-> | G: Q3 Fiscal (UC Pages) | 2 | Q3 service-level target (only in UC Pages, not in any table) |
+> | P: Critical Thresholds | 5 | Domain-specific "critical" definitions (each domain has a unique threshold) |
 >
-> After each improvement iteration, we rerun the failing tests and track progressive accuracy: Baseline (65%) → Iteration 1 (85%) → Iteration 2 (95%) → Iteration 3 (100%). A separate **comprehensive prompt benchmark** sends one broad executive question to the Supervisor Agent and scores how many of the 40 values appear in its unified report — testing whether UC improvements for individual metrics *indirectly* improve the Supervisor's coverage.
+> At baseline, agent answers are **non-deterministic** — approximately 30-31 of 45 tests pass (~67-69%), but the exact count fluctuates across runs because the agent guesses from column/table names. After each improvement iteration, more answers become **deterministic** (grounded in UC features rather than guessing): Baseline (~30-31/45) → Iteration 1 (~35-37/45) → Iteration 2 (~38-40/45) → Iteration 3 (45/45, fully deterministic). A separate **comprehensive prompt benchmark** sends one broad executive question to the Supervisor Agent and scores how many of the 45 values appear in its unified report — testing whether UC improvements *indirectly* improve the Supervisor's coverage.
+>
+> **Important**: Genie Agents **cannot** access UC Pages (proven — the agent stated: "I don't have direct access to those pages in this context"). G01/G02 are fixed by the `fiscal_targets` TABLE. P01-P05 are fixed by **SQL Functions** that encode the same thresholds UC Pages define for humans.
 
 > **In production, there is no ground truth table.** Instead, accuracy improves through an iterative **user feedback loop**:
 
@@ -177,7 +180,7 @@ The practical rule: **build one domain at a time, one layer at a time.** This wo
 
 The table below lists every UC semantic layer feature this demo uses to fix Genie agent accuracy, grouped by iteration. This is the complete set — no other mechanisms (prompt hacks, fine-tuning, custom models) are involved. Every fix is a standard Unity Catalog or Genie API capability.
 
-#### Iteration 1 — Metadata Enrichment (Baseline 65% → 85%)
+#### Iteration 1 — Metadata Enrichment (Baseline ~67% → ~78%)
 
 | # | Feature | API / SQL | What It Does in This Demo | Tests Fixed |
 | --- | --- | --- | --- | --- |
@@ -186,7 +189,7 @@ The table below lists every UC semantic layer feature this demo uses to fix Geni
 | 3 | **Example SQL Queries** | `example_question_sqls` in Genie `serialized_space.instructions` (REST API PATCH) | Certified SQL patterns that appear in the Genie Agent **Examples tab**. Teaches the agent the exact SQL shape for lead time variance, vendor late %, fulfilled order count, and product family decline. 6 examples across supplier + demand agents. | A04, D04, D06, F02, F03, H01, H02, H03 |
 | 4 | **Benchmark Questions** | `benchmarks.questions` in Genie `serialized_space` (REST API PATCH) | Ground-truth Q&A pairs that appear in the Genie Agent **Benchmarks tab**. Used for evaluation — each benchmark has a SQL answer that Genie compares result sets against during benchmark runs. 7 benchmarks across supplier + demand + logistics agents. | (evaluation, not direct fix) |
 
-#### Iteration 2 — Business Semantics (85% → 95%)
+#### Iteration 2 — Business Semantics (~78% → ~87%)
 
 | # | Feature | API / SQL | What It Does in This Demo | Tests Fixed |
 | --- | --- | --- | --- | --- |
@@ -195,22 +198,23 @@ The table below lists every UC semantic layer feature this demo uses to fix Geni
 | 7 | **UC Governed Tags** | `ALTER TABLE SET TAGS ('key' = 'value')` | Classification tags on all metric views and the CoD view: `domain`, `metric_type`, `data_quality`, `time_granularity`. Helps Genie prefer the certified, authoritative asset over a plausible but wrong table. | (ranking / preference) |
 | 8 | **Schema Domain Tags** | `ALTER SCHEMA SET TAGS ('domain' = '...', 'business_unit' = '...')` | Schema-level business domain classification. All 5 domain schemas tagged with their business function. Routes questions to the right schema and signals organizational ownership. | (routing) |
 
-#### Iteration 3 — Governance Layer (95% → 100%)
+#### Iteration 3 — Governance Layer + SQL Functions (~87% → 100%)
 
 | # | Feature | API / SQL | What It Does in This Demo | Tests Fixed |
 | --- | --- | --- | --- | --- |
 | 9 | **UC Domain** | Created on the **Discover page** (UI) | Business-aligned organization of data assets. A single "Supply Chain Operations" domain groups all 5 schemas. Domains help Genie route questions to the right schema and help humans discover related assets. Persists through teardown — it IS the governance layer. | (routing + discovery) |
-| 10 | **UC Pages (Glossary)** | Created on the **Discover page** (UI), attached to the Domain | Governed business concept definitions — policies, formulas, terminology — that Genie references authoritatively. **Page 1**: Fiscal Calendar & Targets (FY starts July, Q3=Jan-Mar not Jul-Sep, current FY=FY2027, Q3 service-level target=95%). **Page 2**: Cross-Domain Metric Definitions (vendor late rate = per-ORDER 75%, never per-vendor 83.33%; CoD formula; fulfillment = Fulfilled only). These answer questions that are **intentionally NOT in any SQL table**. | G01, G02, F02 |
-| 11 | **Reference Table** | `CREATE TABLE ... fiscal_targets` + added to Executive agent data sources | Queryable data backing the UC Pages. Contains fiscal quarter definitions and target values so the agent can run SQL against policy data. | G01, G02 |
+| 10 | **UC Pages (Glossary)** | Created on the **Discover page** (UI), attached to the Domain | Governed business concept definitions for **humans** — policies, formulas, terminology. 7 Pages: Fiscal Calendar & Targets, Cross-Domain Metric Definitions, and 5 domain-specific "critical" threshold definitions. **Important**: Genie Agents cannot access UC Pages (proven). Pages serve as human-facing governance documentation; agent-facing thresholds are delivered via SQL Functions (#12) and reference tables (#11). | (human governance) |
+| 11 | **Reference Table** | `CREATE TABLE ... fiscal_targets` + added to Executive agent data sources | Queryable data encoding fiscal calendar and service-level targets. The agent queries this table directly for Q3 target and fiscal quarter definitions. | G01, G02 |
+| 12 | **SQL Functions** (5) | `CREATE FUNCTION get_critical_*()` + added to agent data sources | Table-valued functions encoding domain-specific "critical" thresholds: `get_critical_delay_shipments()` (delay > 3 days), `get_critical_accuracy_forecasts()` (accuracy < 85%), `get_critical_supply_positions()` (days\_of\_supply < 14), `get_critical_quality_orders()` (quality < 70), `get_critical_disruption_regions()` (late\_shipments > 500). These are the agent-accessible equivalent of what UC Pages define for humans. | P01, P02, P03, P04, P05 |
 
 #### Supporting Features (used throughout)
 
 | # | Feature | API / SQL | What It Does in This Demo |
 | --- | --- | --- | --- |
-| 12 | **Genie Agent Instructions** | `text_instructions` in `serialized_space` (REST API PATCH) | Natural language guidance for each agent: table descriptions, key columns, disambiguation rules, date references, out-of-scope handling. All 5 agents have multi-paragraph instructions. In Iteration 3, agent instructions are **commented out** to test whether UC Pages alone suffice. |
-| 13 | **Genie Agent Data Sources** | `data_sources.tables` in `serialized_space` (REST API PATCH) | Explicit table access lists per agent. Tables sorted alphabetically (API requirement). Views and reference tables added incrementally in each iteration. Controls what each agent can see and query. |
+| 13 | **Genie Agent Instructions** | `text_instructions` in `serialized_space` (REST API PATCH) | Natural language guidance for each agent: table descriptions, key columns, disambiguation rules, date references, out-of-scope handling. All 5 agents have multi-paragraph instructions. |
+| 14 | **Genie Agent Data Sources** | `data_sources.tables` in `serialized_space` (REST API PATCH) | Explicit table access lists per agent. Tables sorted alphabetically (API requirement). Views, reference tables, and SQL functions added incrementally in each iteration. Controls what each agent can see and query. |
 
-> **Key insight**: Features 1-8 are the **repeatable, scriptable** part of the semantic layer — they can be applied via SQL and API in CI/CD. Features 9-10 are the **governance** part — they require human judgment about business definitions and organizational structure, and they are created in the Discover page UI. Feature 11 bridges the two: a scriptable table that encodes governance decisions. This split mirrors how real teams work: data engineers script the metadata enrichment; data stewards define the business glossary.
+> **Key insight**: Features 1-8 are the **repeatable, scriptable** part of the semantic layer — they can be applied via SQL and API in CI/CD. Features 9-10 are the **governance** part — they require human judgment about business definitions, and they are created in the Discover page UI. Features 11-12 bridge the two: scriptable tables and SQL functions that encode governance decisions so agents can access them (since agents cannot read UC Pages directly). This split mirrors how real teams work: data engineers script the metadata enrichment; data stewards define the business glossary; SQL functions make those definitions agent-accessible.
 
 ---
 
@@ -321,27 +325,32 @@ The Supervisor Agent investigates all 5 domains and produces a structured execut
 
 ---
 
-## Baseline Test Results (40-Test Assumption Tester v3)
+## Baseline Test Results (45-Test Assumption Tester v3)
 
-Before any UC Semantics features are applied, the 5 Genie Agents are tested with **40 individual questions** using **exact 2-decimal precision matching** (`round(abs(found), 2) == round(abs(expected), 2)`). No tolerance bands — either it matches or it doesn't.
+Before any UC Semantics features are applied, the 5 Genie Agents are tested with **45 individual questions** using **exact 2-decimal precision matching** (`round(abs(found), 2) == round(abs(expected), 2)`). No tolerance bands — either it matches or it doesn't.
 
-**Baseline score: 26/40 PASS (65%), 14 FAIL (35%)**
+**Baseline score: ~30-31/45 PASS (~67-69%), non-deterministic**
 
-> "PASS" means the agent answers correctly at baseline WITHOUT any UC feature.
+> Baseline scores fluctuate across runs. The agent guesses from column/table names — those guesses are probabilistic. Some tests pass one run and fail the next.
+>
+> "PASS" means the agent answers correctly at baseline WITHOUT any UC feature (but may not be reliable).
 > "FAIL" means the agent genuinely needs the UC feature to answer correctly.
 
-| Group | Tests | Pass | Fail | Coverage |
+| Group | Tests | Typical Pass | Typical Fail | Coverage |
 | --- | --- | --- | --- | --- |
-| A: Logistics MV | 6 | 5 | 1 | A04 fails: date ambiguity ("August" without year) |
-| B: Demand MV | 4 | 4 | 0 | 100% at baseline |
-| C: Inventory MV | 5 | 5 | 0 | 100% at baseline |
-| D: Supplier MV | 7 | 5 | 2 | Wrong table (supplier_lead_times vs supplier_orders) |
+| A: Logistics | 6 | 4-5 | 1-2 | A02/A03 flaky (non-deterministic); A04 fails: date ambiguity |
+| B: Demand | 4 | 3-4 | 0-1 | B03 occasionally flaky |
+| C: Inventory | 5 | 4-5 | 0-1 | C05 occasionally flaky |
+| D: Supplier | 7 | 5-6 | 1-2 | Wrong table (supplier_lead_times vs supplier_orders) |
 | E: Cross-domain | 3 | 2 | 1 | CoD requires cross-domain Open Knowledge view |
 | F: Indirect/Ambiguity | 6 | 4 | 2 | Per-vendor vs per-order ambiguity, status filter |
+| G: Q3 Fiscal | 2 | 0 | 2 | Target not in any table |
 | H: Hard failures | 7 | 1 | 6 | Cross-domain queries impossible for single agent |
-| G: Q3/UC Pages | 2 | 0 | 2 | Target not in any table |
+| P: Critical Thresholds | 5 | 2-3 | 2-3 | Domain-specific "critical" definitions — agent guesses thresholds |
 
-### The 12 Failures and Their Fix Plan (3 Iterations)
+### Structural Failures and Their Fix Plan (3 Iterations)
+
+These are the tests that consistently fail at baseline. Additional tests may fail intermittently due to non-determinism (A02, A03, B03, C05, F06).
 
 | ID | Metric | GT | Failure Pattern | Fix Iteration |
 | --- | --- | --- | --- | --- |
@@ -349,7 +358,7 @@ Before any UC Semantics features are applied, the 5 Genie Agents are tested with
 | D06 | Avg lead time variance (Asia) | 13.67 | Same wrong-table issue | **Iter 1** |
 | F02 | Vendor late % (per-order) | 75.00 | Per-vendor (83.33%) vs per-order (75%) ambiguity | **Iter 1** |
 | F03 | Fulfilled order count | 1342 | Includes Partially_Fulfilled (1512) | **Iter 1** |
-| F05 | Backordered order count | 275 | Intermittent status filter issue | **Iter 1** |
+| H01-H02 | Lead time variance (Europe/NA) | varies | Wrong table (same as D04) | **Iter 1** |
 | H03 | Order fulfillment rate | 71.23 | Includes Partially_Fulfilled (80.25%) | **Iter 1** |
 | E03 | Cost of Disruption (Western) | 3757298.31 | Cross-domain: no single agent has demand + logistics + supplier data | **Iter 2** |
 | H05 | Revenue at risk from disruptions | 3138569.66 | Cross-domain: demand + logistics | **Iter 2** |
@@ -362,13 +371,13 @@ Before any UC Semantics features are applied, the 5 Genie Agents are tested with
 
 | Iteration | UC Feature Class | What It Does | Targets | Expected Outcome |
 | --- | --- | --- | --- | --- |
-| **1. Column Comments + Example SQL + Benchmarks** | Enterprise Context (Layer 1) | Table/column comments for disambiguation + Example SQL Queries (via Genie Examples tab) + Benchmark questions for ambiguous metrics | A04, D04, D06, F02, F03, H01, H02, H03 | 34/40 → fixes wrong-table, status ambiguity, and date inference |
-| **2. UC Metric Views + Governed Tags + Open Knowledge** | Business Semantics (Layer 2) | 4 domain metric views (YAML), schema domain tags, 1 cross-domain Open Knowledge view (CoD) | E03, H05, H06, H07 | 38/40 → fixes cross-domain queries |
-| **3. UC Pages + Domain + Temporal Context** | Glossary & Governance (Layer 2+3) | Fiscal calendar reference table, temporal context on all agents, UC Domain + Pages (created in UI) | F02, G01, G02 | 40/40 → fixes missing business definitions + remaining ambiguity |
+| **1. Column Comments + Example SQL + Benchmarks** | Enterprise Context (Layer 1) | Table/column comments for disambiguation + Example SQL Queries (via Genie Examples tab) + Benchmark questions | A04, D04, D06, F02, F03, H01, H02, H03 | ~35-37/45 → fixes wrong-table, status ambiguity, date inference |
+| **2. UC Metric Views + Governed Tags + Open Knowledge** | Business Semantics (Layer 2) | 4 domain metric views (YAML), schema domain tags, 1 cross-domain Open Knowledge view (CoD) | E03, H05, H06, H07 | ~38-40/45 → fixes cross-domain queries, stabilizes more |
+| **3. fiscal_targets + SQL Functions + UC Pages** | Governance (Layer 2+3) | `fiscal_targets` table, 5 SQL Functions for critical thresholds, UC Domain + Pages (UI) | G01, G02, P01-P05 | **45/45 (fully deterministic)** |
 
 ### Key Insight
 
-Genie Agents are remarkably capable at baseline — they correctly map business terms to column names ("revenue" → `total_amount`, "fill rate" → `service_level_pct`) and handle region inference ("West" → `ILIKE '%Western%'`) without any synonyms, comments, or instructions. The 65% baseline accuracy proves that the UC Semantics stack is needed only for genuinely hard cases: table disambiguation, definition ambiguity, cross-domain computation, and business policy.
+Genie Agents are remarkably capable at baseline — they correctly map business terms to column names ("revenue" → `total_amount`, "fill rate" → `service_level_pct`) and handle region inference ("West" → `ILIKE '%Western%'`) without any synonyms, comments, or instructions. But these baseline answers are **non-deterministic** — the same question can produce different SQL across runs. The progression from ~67% non-deterministic to 100% deterministic proves that UC Semantic features don't just improve accuracy — they make answers **reliable and reproducible**.
 
 ---
 
@@ -427,7 +436,7 @@ Set the `warehouse_id` widget to your SQL Warehouse ID before running.
 This creates a **deliberately minimal** baseline:
 - Genie Agents have tables but **no** certified queries, synonyms, or enhanced instructions
 - Supervisor has basic instructions — no structured format, no specific question phrasings
-- Expected accuracy: **~65%** (26 of 40 metric tests pass at baseline)
+- Expected accuracy: **~67-69%** (~30-31 of 45 metric tests pass at baseline, non-deterministic)
 
 **Test it now** — go to the Agents playground and send the canonical prompt. The Supervisor will try but produce inconsistent, partially incorrect results.
 
@@ -443,7 +452,7 @@ After each iteration cell, the notebook automatically runs `test_failing_metrics
 
 **What it fixes**: Table/column comments resolve table disambiguation (agent picks `supplier_orders` instead of `supplier_lead_times` for lead time variance). Example SQL Queries teach Genie correct SQL patterns for common questions via the structured Examples tab (stronger than embedding SQL in text instructions). Benchmark questions provide ground-truth Q&A pairs for evaluating accuracy via the Benchmarks tab. Fixes status-filter ambiguity ("Fulfilled" excludes "Partially_Fulfilled") and per-order vs per-vendor aggregation.
 
-**Targets**: A04, D04, D06, F02, F03, H01, H02, H03 → **34/40 (85%)**
+**Targets**: A04, D04, D06, F02, F03, H01, H02, H03 → **~35-37/45 (~78%)**
 
 ##### Iteration 2: UC Metric Views + Governed Tags + Open Knowledge View (cell 10)
 
@@ -451,19 +460,19 @@ After each iteration cell, the notebook automatically runs `test_failing_metrics
 
 **What it fixes**: 4 UC Metric Views (`delivery_performance_by_region`, `revenue_comparison_by_region`, `inventory_safety_stock_metrics`, `supplier_performance_by_continent`) encode exact KPI formulas in governed column names. 1 Open Knowledge View (`cost_of_disruption_by_region`) bridges data from 4 domain schemas that no single agent can access alone. Governed tags and schema domain tags improve asset discovery.
 
-**Targets**: E03, H05, H06, H07 → **38/40 (95%)**
+**Targets**: E03, H05, H06, H07 → **~38-40/45 (~87%)**
 
 **Key insight**: Open Knowledge is a governed view that crosses domain boundaries — it exists because some business questions (like Cost of Disruption) require data from multiple schemas.
 
-##### Iteration 3: UC Domain + UC Pages — Governance Layer (cell 15)
+##### Iteration 3: fiscal_targets + SQL Functions + UC Pages (cell 18)
 
-**UC Features**: UC Domain (Discover page), UC Pages (glossary / business definitions), Reference Table (`fiscal_targets`)
+**UC Features**: Reference Table (`fiscal_targets`), 5 SQL Functions for critical thresholds, UC Domain + UC Pages (Discover page, human governance)
 
-**What it fixes**: UC Pages feed directly into Genie's ontology. **Page 1** ("Fiscal Calendar & Targets") defines Q3=Jan-Mar (not calendar Jul-Sep), the 95% service-level target, and temporal context (reference date Sept 1 2026, last month = August 2026). **Page 2** ("Cross-Domain Metric Definitions") governs that "vendor late rate" = late POs / total POs per ORDER (75.0%), never COUNT(DISTINCT supplier_id) per-vendor (83.33%). The `fiscal_targets` reference table provides the queryable data backing Page 1. No agent instruction injection — the governance layer IS the fix.
+**What it fixes**: `fiscal_targets` TABLE provides queryable fiscal calendar and Q3 target (95%). SQL Functions (`get_critical_delay_shipments()`, etc.) encode domain-specific "critical" thresholds that agents would otherwise guess. UC Pages provide human-facing governance documentation on the Discover page. **Important**: Genie Agents cannot access UC Pages directly (proven — the agent stated it has no access). G01/G02 are fixed by the `fiscal_targets` table. P01-P05 are fixed by SQL Functions.
 
-**Targets**: F02, G01, G02 → **40/40 (100%)**
+**Targets**: G01, G02, P01-P05 → **45/45 (100%, fully deterministic)**
 
-**Key insight**: The last mile of accuracy requires business governance, not prompt engineering. UC Pages resolve ambiguity at the ontology level — when Genie encounters "Q3 target" or "% vendors delivered late", it consults the governed Page definitions before writing SQL. This is what separates a semantic layer from mere metadata enrichment.
+**Key insight**: The last mile of accuracy requires grounded governance assets (tables and SQL functions) that agents can actually query. UC Pages are valuable for human documentation but agents need SQL-queryable equivalents.
 
 ##### Prerequisite: UC Domain and Pages (manual — from UI)
 
@@ -490,10 +499,10 @@ Before running Iteration 3, create these on the **Discover** page:
 
 | Stage | What Changed | UC Feature | Score |
 |-------|-------------|-----------|-------|
-| **Baseline** | Bare tables + basic agent instructions, no semantic enrichment | None | **26/40 (65%)** |
-| **+ Iter 1: Comments + Example SQL + Benchmarks** | Column/table comments for disambiguation + Example SQL Queries + Benchmarks | `ALTER TABLE SET COMMENT` + `example_question_sqls` API + `benchmarks` API | **34/40 (85%)** |
-| **+ Iter 2: Metric Views + Tags + Open Knowledge** | 4 UC Metric Views (YAML) + governed tags + CoD cross-domain view | `CREATE VIEW WITH METRICS LANGUAGE YAML` + `ALTER TABLE SET TAGS` | **38/40 (95%)** |
-| **+ Iter 3: UC Pages + Domain + Temporal** | Fiscal targets reference table + temporal context + UC Domain & Pages (UI) | UC Pages + Domains + reference tables | **40/40 (100%)** |
+| **Baseline** | Bare tables + basic agent instructions, no semantic enrichment | None | **~30-31/45 (~67%, non-deterministic)** |
+| **+ Iter 1: Comments + Example SQL + Benchmarks** | Column/table comments + Example SQL Queries + Benchmarks | `ALTER TABLE SET COMMENT` + `example_question_sqls` API + `benchmarks` API | **~35-37/45 (~78%)** |
+| **+ Iter 2: Metric Views + Tags + Open Knowledge** | 4 UC Metric Views (YAML) + governed tags + CoD cross-domain view | `CREATE VIEW WITH METRICS LANGUAGE YAML` + `ALTER TABLE SET TAGS` | **~38-40/45 (~87%)** |
+| **+ Iter 3: fiscal_targets + SQL Functions + UC Pages** | `fiscal_targets` table + 5 SQL Functions + UC Domain & Pages (UI) | Reference tables + SQL Functions + UC Pages + Domains | **45/45 (100%, fully deterministic)** |
 
 ## Expected Output (after all 3 iterations)
 
@@ -572,7 +581,7 @@ These are NOT explicitly asked in the prompt, but appear in the agent's analysis
 
 ## Tracked Ground Truth
 
-The full test suite consists of **40 individual metric tests** organized into 8 groups (A-H). Each test sends a natural-language question to a specific Genie Agent and compares the returned value against a ground truth at exact 2-decimal precision.
+The full test suite consists of **45 individual metric tests** organized into 9 groups (A-H, P). Each test sends a natural-language question to a specific Genie Agent and compares the returned value against a ground truth at exact 2-decimal precision.
 
 See `00_run_all` cell 6 (Assumption Tester v3) for the complete test definitions and ground truth values.
 
@@ -694,7 +703,7 @@ Create a single domain on the **Discover** page that encompasses all supply chai
 
 ### UC Pages (create from UI — within the Domain)
 
-Create these 2 Pages within the "Supply Chain Operations" domain. Each defines business concepts that AI agents reference authoritatively.
+Create 7 Pages within the "Supply Chain Operations" domain: 2 general + 5 domain-specific critical threshold definitions. Each defines business concepts that AI agents reference authoritatively.
 
 #### Page 1: "Fiscal Calendar & Targets"
 
@@ -785,15 +794,15 @@ If any one of those is missing, Genie can still produce plausible SQL, but not n
 
 ## Iteration Plan (00_run_all.py)
 
-The master orchestrator notebook runs **3 inline iterations** (cells 8, 10, 15), each adding a distinct category of UC Semantics feature. A 40-test assumption tester runs after each iteration to measure progress.
+The master orchestrator notebook runs **3 inline iterations** (cells 9, 12, 18), each adding a distinct category of UC Semantics feature. A 45-test assumption tester runs after each iteration to measure progress.
 
 | Stage | Cell | UC Feature Added | Targets Fixed | Score |
 |---|---|---|---|---|
-| **Baseline** | Cell 6 | None — bare tables + lean agent instructions | — | **26/40 (65%)** |
-| **Iter 1** | Cell 8 | Column/table **comments** + **Example SQL Queries** + **Benchmarks** | A04, D04, D06, F02, F03, H01, H02, H03 | **34/40 (85%)** |
-| **Iter 2** | Cell 10 | 4 UC **Metric Views** (YAML) + **governed tags** + 1 **Open Knowledge** view (CoD) | E03, H05, H06, H07 | **38/40 (95%)** |
-| **Iter 3** | Cell 15 | Fiscal **reference table** + **temporal context** + UC **Domain & Pages** (UI) | F02, G01, G02 | **40/40 (100%)** |
-| **Final Proof** | Cell 16 | Full 40-test rerun — proof of 40/40 | — | **40/40 (100%)** |
+| **Baseline** | Cell 6 | None — bare tables + lean agent instructions | — | **~30-31/45 (~67%, non-deterministic)** |
+| **Iter 1** | Cell 9 | Column/table **comments** + **Example SQL Queries** + **Benchmarks** | A04, D04, D06, F02, F03, H01, H02, H03 | **~35-37/45 (~78%)** |
+| **Iter 2** | Cell 12 | 4 UC **Metric Views** (YAML) + **governed tags** + 1 **Open Knowledge** view (CoD) | E03, H05, H06, H07 | **~38-40/45 (~87%)** |
+| **Iter 3** | Cell 18 | `fiscal_targets` table + 5 **SQL Functions** + UC **Domain & Pages** (UI) | G01, G02, P01-P05 | **45/45 (100%, deterministic)** |
+| **Final Proof** | Cell 20 | Full 45-test rerun — proof of 45/45 | — | **45/45 (100%)** |
 
 **Key design principle**: Each iteration adds ONE category of UC feature. The progression proves that **data governance → better AI answers**.
 
@@ -801,10 +810,10 @@ The master orchestrator notebook runs **3 inline iterations** (cells 8, 10, 15),
 
 | Stage | What Still Fails | Why |
 |---|---|---|
-| Baseline | 14 failures — wrong tables, status ambiguity, cross-domain, business policy | No semantic context beyond column names |
-| After Iter 1 (Comments + Certified Queries) | F02 (vendor ambiguity), cross-domain queries (CoD, revenue at risk), Q3 targets | Comments + certified queries fix single-agent issues but can't span domains or resolve deep semantic ambiguity |
-| After Iter 2 (Metric Views + Open Knowledge) | F02 (vendor ambiguity), Q3 service-level target (95%) | Metric views fix formula + cross-domain, but policies aren't in any table and deep ambiguity remains |
-| After Iter 3 (UC Pages + Temporal Context) | Nothing — 40/40 | All failure modes resolved |
+| Baseline | ~14-15 structural failures + non-deterministic flakes (A02/A03/B03/C05/F06) | No semantic context beyond column names; agent guesses are probabilistic |
+| After Iter 1 (Comments + Example SQL) | Cross-domain queries (CoD, revenue at risk), Q3 targets, P-group thresholds | Comments fix single-agent issues but can't span domains or define thresholds |
+| After Iter 2 (Metric Views + Open Knowledge) | Q3 target (95%), P-group critical thresholds, remaining non-determinism | Metric views fix formula + cross-domain, but policies and thresholds aren't in any table |
+| After Iter 3 (fiscal_targets + SQL Functions) | Nothing — 45/45, fully deterministic | All failure modes resolved; every answer grounded in governed asset |
 
 > **Note**: All time-based metrics use a fixed reference date of September 1, 2026. "Last month" = August 2026, "prior month" = July 2026. The demo produces identical results every run.
 
