@@ -974,7 +974,7 @@ Each provenance tier maps to a **confidence label** indicating reproducibility:
 |---|---|---|
 | **DETERMINISTIC** | Grounded in governed asset — repeatable across runs | Iter 2 (Metric Views), Iter 3 (SQL Functions, Reference Tables) |
 | **HEURISTIC** | Guided by metadata — likely repeatable | Iter 1 (Column Comments, Example SQL) |
-| **BASELINE** | Raw table interpretation — may vary across runs | Baseline (no UC feature used) |
+| **INFERRED** | Agent inferred answer from raw column/table names — may vary across runs | Baseline (no UC feature used) |
 | **GUESSED** | Agent invented the answer — unreliable | Guessed thresholds, no UC feature available |
 
 Visual cells (7, 10, 13, 20) display two-panel charts: (1) Provenance tier distribution, (2) Reasoning Confidence distribution.
@@ -991,7 +991,7 @@ Visual cells (7, 10, 13, 20) display two-panel charts: (1) Provenance tier distr
 **Cell 22 (Robustness Test)** sends 10 hardest questions × 3 rephrased variations (30 API calls):
 * Tests whether agent answers are robust to vocabulary changes
 * Computes per-test **Reliability** (correct answer regardless of phrasing) and **Dependability** (same SQL approach regardless of phrasing)
-* Key finding: DETERMINISTIC-tier tests are robust to rephrasing; BASELINE-tier tests break when vocabulary changes
+* Key finding: DETERMINISTIC-tier tests are robust to rephrasing; INFERRED-tier tests break when vocabulary changes
 
 ## Technical Notes
 

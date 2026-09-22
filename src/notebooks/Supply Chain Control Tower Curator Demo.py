@@ -1496,8 +1496,8 @@ def plot_classification_dashboard(stage_results, assumptions_list, agent_probes=
     # Print detail table
     latest_cls = classify_tests(stage_results, assumptions_list, agent_probes)
     print(f"\n  CLASSIFICATION ({available[-1]}):")
-    print(f"  {'ID':<5} {'Verdict':<6} {'Was':<5} {'Category':<50} Explanation")
-    print(f"  {'_'*120}")
+    print(f"  {'ID':<5} {'Now':<7} {'Base':<5} {'Expected Fix':<28} {'Provenance (detected)':<38} Explanation")
+    print(f"  {'_'*130}")
     prev_cat = ""
     for cl in sorted(latest_cls, key=lambda x: (CAT_NAMES.index(x['category']) if x['category'] in CAT_NAMES else 99, x['id'])):
         if cl['category'] != prev_cat:
@@ -1507,7 +1507,8 @@ def plot_classification_dashboard(stage_results, assumptions_list, agent_probes=
         icon = {"PASS": "\u2705", "FAIL": "\u274c", "ERROR": "\u26a0\ufe0f"}.get(cl['current'], '?')
         risk = FRAGILE_RISK.get(cl['id'])
         risk_flag = " \u26a0\ufe0f FRAGILE RISK" if risk and cl['category'] != "Fragile/Non-Deterministic" else ""
-        print(f"  {cl['id']:<5} {icon}{cl['current']:<5} {cl['baseline']:<5} {cl['explanation']}{risk_flag}")
+        prov_short = (cl.get('provenance') or 'N/A')[:36]
+        print(f"  {cl['id']:<5} {icon}{cl['current']:<5} {cl['baseline']:<5} {cl.get('claimed_fix',''):<28} {prov_short:<38} {cl['explanation']}{risk_flag}")
         if risk and cl['category'] != "Fragile/Non-Deterministic":
             print(f"        \u2514\u2500 Why fragile: {risk}")
         if cl.get('agent_confidence') and cl['baseline'] == 'PASS':
@@ -1560,6 +1561,104 @@ if RUN_MODE != "iterations_only":
     spaces = {}
 else:
     print(f"⏭ Skipping data creation (run_mode={RUN_MODE})")
+
+# COMMAND ----------
+
+# DBTITLE 1,Test Suite: 45 Questions × 5 Genie Agents
+# MAGIC %md
+# MAGIC ## Test Suite: 45 Questions × 5 Genie Agents
+# MAGIC
+# MAGIC Each question is sent to a **specific domain agent** and the response is compared against a ground truth value at **exact 2-decimal precision**. No tolerance bands — either it matches or it doesn't.
+# MAGIC
+# MAGIC ### Group A: Logistics (6 tests → `SC Logistics` agent)
+# MAGIC
+# MAGIC | ID | Question | Ground Truth |
+# MAGIC | --- | --- | --- |
+# MAGIC | A01 | What is the on-time delivery rate for Western region shipments in August 2026? | 5.43 |
+# MAGIC | A02 | What is the delayed shipment rate for Western region shipments last month? | 94.57 |
+# MAGIC | A03 | What is the average delay in days for delayed shipments in the Western region last month? | 2.94 |
+# MAGIC | A04 | How many total shipments went to the Western region in August? | 1086 |
+# MAGIC | A05 | How many late shipments went to the Western region last month? | 1027 |
+# MAGIC | A06 | What is the total wasted freight on late shipments in Western region last month? | 2484985.57 |
+# MAGIC
+# MAGIC ### Group B: Demand (4 tests → `SC Demand Analysis` agent)
+# MAGIC
+# MAGIC | ID | Question | Ground Truth |
+# MAGIC | --- | --- | --- |
+# MAGIC | B01 | What is the total revenue for the Western region in August 2026? | 3341062.58 |
+# MAGIC | B02 | What was the total revenue for the Western region in July 2026? | 4581392.70 |
+# MAGIC | B03 | What is the revenue change in dollars for Western region month-over-month? | -1240330.12 |
+# MAGIC | B04 | What is the percentage change in revenue for Western region last month vs prior month? | -27.07 |
+# MAGIC
+# MAGIC ### Group C: Inventory (5 tests → `SC Inventory Management` agent)
+# MAGIC
+# MAGIC | ID | Question | Ground Truth |
+# MAGIC | --- | --- | --- |
+# MAGIC | C01 | How many inventory positions are below safety stock in the Western region? | 109 |
+# MAGIC | C02 | How many unique SKUs are below safety stock in the Western region? | 61 |
+# MAGIC | C03 | How many stockout positions are there in the Western region? | 35 |
+# MAGIC | C04 | How many unique SKUs are completely stocked out in the Western region? | 33 |
+# MAGIC | C05 | What is the average days of supply for at-risk items in the Western region? | 0.96 |
+# MAGIC
+# MAGIC ### Group D: Supplier (7 tests → `SC Supplier Procurement` agent)
+# MAGIC
+# MAGIC | ID | Question | Ground Truth |
+# MAGIC | --- | --- | --- |
+# MAGIC | D01 | How many total purchase orders were placed in August 2026? | 48 |
+# MAGIC | D02 | How many purchase orders were delayed last month? | 36 |
+# MAGIC | D03 | What percentage of purchase orders were delayed last month? | 75.00 |
+# MAGIC | D04 | What is the average lead time variance in days for all suppliers last month? | 8.69 |
+# MAGIC | D05 | What percentage of purchase orders from Asia suppliers were delayed in August? | 100.00 |
+# MAGIC | D06 | What is the average lead time variance for Asia suppliers last month? | 13.67 |
+# MAGIC | D07 | How many purchase orders did we place with Asia suppliers in August? | 30 |
+# MAGIC
+# MAGIC ### Group E: Cross-Domain & Executive (3 tests)
+# MAGIC
+# MAGIC | ID | Agent | Question | Ground Truth |
+# MAGIC | --- | --- | --- | --- |
+# MAGIC | E01 | `SC Executive` | What is our current fill rate? | 80.70 |
+# MAGIC | E02 | `SC Supplier` | What are the total vendor SLA penalties we incurred? | 1185043.10 |
+# MAGIC | E03 | `SC Executive` | What is the total Cost of Disruption for the Western region last month? | 3757298.31 |
+# MAGIC
+# MAGIC ### Group F: Indirect & Ambiguity (6 tests → `SC Demand Analysis` or `SC Supplier`)
+# MAGIC
+# MAGIC | ID | Agent | Question | Ground Truth |
+# MAGIC | --- | --- | --- | --- |
+# MAGIC | F01 | `SC Demand` | Show me the total revenue for the West region last month | 3341062.58 |
+# MAGIC | F02 | `SC Supplier` | What percentage of vendors had delayed deliveries last month? | 75.00 |
+# MAGIC | F03 | `SC Demand` | How many Western region orders were fulfilled last month? | 1342 |
+# MAGIC | F04 | `SC Demand` | What is the total cancelled revenue in Western region in August? | 179419.26 |
+# MAGIC | F05 | `SC Demand` | How many orders were backordered in Western region last month? | 275 |
+# MAGIC | F06 | `SC Demand` | Which product family had the largest revenue decline in Western region last month vs prior month? | 349062.88 |
+# MAGIC
+# MAGIC ### Group H: Hard Failures (7 tests — guaranteed baseline misses)
+# MAGIC
+# MAGIC | ID | Agent | Question | Ground Truth | Failure Pattern |
+# MAGIC | --- | --- | --- | --- | --- |
+# MAGIC | H01 | `SC Supplier` | What is the average lead time variance for Europe suppliers last month? | 0.38 | Wrong table trap |
+# MAGIC | H02 | `SC Supplier` | What is the average lead time variance for North America suppliers last month? | 0.40 | Wrong table trap |
+# MAGIC | H03 | `SC Demand` | What is the order fulfillment rate for Western region last month? | 71.23 | Status ambiguity |
+# MAGIC | H04 | `SC Demand` | What percentage of Western region orders were only partially fulfilled last month? | 9.02 | Status value trap |
+# MAGIC | H05 | `SC Executive` | What is the total revenue at risk from supply chain disruptions in Western region? | 3138569.66 | Cross-domain |
+# MAGIC | H06 | `SC Inventory` | What is the average revenue at risk per stockout SKU in Western region? | 14368.63 | Cross-domain |
+# MAGIC | H07 | `SC Executive` | What is our total cost of supply chain disruptions as a ratio of Western region revenue? | 1.12 | Cross-domain |
+# MAGIC
+# MAGIC ### Group G: Q3 Fiscal Calendar (2 tests → `SC Executive` agent)
+# MAGIC
+# MAGIC | ID | Question | Ground Truth | Why It's Hard |
+# MAGIC | --- | --- | --- | --- |
+# MAGIC | G01 | Are we going to miss our Q3 service-level targets? | 95.0 | Q3 = fiscal Jan-Mar, not calendar Jul-Sep |
+# MAGIC | G02 | What is our Q3 service-level target? | 95.0 | Target not in any table |
+# MAGIC
+# MAGIC ### Group P: Critical Threshold Policies (5 tests — unguessable multi-condition rules)
+# MAGIC
+# MAGIC | ID | Agent | Question | Ground Truth | Policy Rule |
+# MAGIC | --- | --- | --- | --- | --- |
+# MAGIC | P01 | `SC Logistics` | How many shipments in August were flagged under the Logistics Risk Standards? | 176 | `delay_days >= 5 AND total_weight_kg > 800` |
+# MAGIC | P02 | `SC Demand` | How many Western region orders in August triggered a Demand Anomaly Alert? | 77 | `quantity >= 8 AND unit_price < 30 AND channel='Online'` |
+# MAGIC | P03 | `SC Inventory` | How many inventory positions are classified as supply-risk under Inventory Standards? | 106 | `days_of_supply BETWEEN 1 AND 11 AND below_safety_stock_flag=true AND on_hand_qty > 0` |
+# MAGIC | P04 | `SC Supplier` | How many supplier orders last month fell below the Procurement Quality Minimum? | 11 | `quality_score < 75 AND lead_time_variance_days > 12` |
+# MAGIC | P05 | `SC Executive` | How many suppliers exceeded the Executive Disruption Threshold? | 3 | `composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000` |
 
 # COMMAND ----------
 
@@ -1892,29 +1991,29 @@ assumptions = [
     # \u2500\u2500 GROUP G: Q3 Fiscal Calendar Confusion (UC Pages) \u2500\u2500
     ("G01", "executive",
      "Are we going to miss our Q3 service-level targets?",
-     95.0, "Q3 target (only in UC Pages, Q3=Jan-Mar fiscal)", "UC Pages (Iter 3)"),
+     95.0, "Q3 target (in fiscal_targets table, Q3=Jan-Mar fiscal)", "fiscal_targets Table (Iter 3)"),
     ("G02", "executive",
      "What is our Q3 service-level target?",
-     95.0, "Q3 target value (not in any table)", "UC Pages (Iter 3)"),
+     95.0, "Q3 target value (in fiscal_targets table)", "fiscal_targets Table (Iter 3)"),
 
     # ── GROUP P: UC PAGES ONLY — domain-specific "critical" thresholds ──
     # Domain-specific POLICY NAMES — each defined only in its UC Page.
     # Without the UC Page, agent cannot map policy names to column thresholds.
     ("P01", "logistics",
      "How many shipments in August were flagged under the Logistics Risk Standards?",
-     176, "UC Page: Logistics Risk = delay >= 5 AND weight > 800", "UC Pages (Iter 3)"),
+     176, "UC Page: Logistics Risk = delay >= 5 AND weight > 800", "SQL Function (Iter 3)"),
     ("P02", "demand",
      "How many Western region orders in August triggered a Demand Anomaly Alert?",
-     77, "UC Page: Demand Anomaly = qty >= 8 AND price < 30 AND Online", "UC Pages (Iter 3)"),
+     77, "UC Page: Demand Anomaly = qty >= 8 AND price < 30 AND Online", "SQL Function (Iter 3)"),
     ("P03", "inventory",
      "How many inventory positions are classified as supply-risk under Inventory Standards?",
-     106, "UC Page: Inventory Risk = dos 1-11 AND below_ss AND on_hand > 0", "UC Pages (Iter 3)"),
+     106, "UC Page: Inventory Risk = dos 1-11 AND below_ss AND on_hand > 0", "SQL Function (Iter 3)"),
     ("P04", "supplier",
      "How many supplier orders last month fell below the Procurement Quality Minimum?",
-     11, "UC Page: Procurement Quality = score < 75 AND ltv > 12", "UC Pages (Iter 3)"),
+     11, "UC Page: Procurement Quality = score < 75 AND ltv > 12", "SQL Function (Iter 3)"),
     ("P05", "executive",
      "How many suppliers exceeded the Executive Disruption Threshold?",
-     3, "UC Page: Exec Disruption = risk < 55 AND ltv > 8 AND penalty > 80K", "UC Pages (Iter 3)"),
+     3, "UC Page: Exec Disruption = risk < 55 AND ltv > 8 AND penalty > 80K", "SQL Function (Iter 3)"),
 ]
 
 GT_QUERIES = {
@@ -2713,8 +2812,8 @@ for i, (aid, agent_key, question, expected, desc, claimed_fix) in enumerate(assu
 print(f"\n\n{'='*100}")
 print("  ASSUMPTION TEST SUMMARY \u2014 v3 COMPREHENSIVE")
 print(f"{'='*100}")
-print(f"  {'ID':<5} {'Result':<12} {'GT':>14} {'Found':>14}  {'Description':<45} {'Fix Needed'}")
-print(f"  {'\u2500'*5} {'\u2500'*12} {'\u2500'*14} {'\u2500'*14}  {'\u2500'*45} {'\u2500'*25}")
+print(f"  {'ID':<5} {'Result':<12} {'GT':>14} {'Found':>14}  {'Description':<45} {'Expected Fix':<25} {'Agent Used'}")
+print(f"  {'\u2500'*5} {'\u2500'*12} {'\u2500'*14} {'\u2500'*14}  {'\u2500'*45} {'\u2500'*25} {'\u2500'*35}")
 
 current_group = ""
 disproved = confirmed = errors = 0
@@ -2726,13 +2825,14 @@ for r in test_results:
                        'D': 'SUPPLIER MV', 'E': 'CROSS-DOMAIN / EXEC', 'F': 'INDIRECT GTs & AMBIGUITY',
                        'G': 'Q3 FISCAL CALENDAR (UC PAGES)',
                        'H': 'HARD FAILURES (GUARANTEED BASELINE MISSES)',
-                       'P': 'UC PAGES ONLY (DOMAIN CRITICAL THRESHOLDS)'}
+                       'P': 'SQL FUNCTIONS (DOMAIN CRITICAL THRESHOLDS)'}
         print(f"\n  \u2500\u2500 {group_names.get(gid, gid)} {'\u2500'*70}")
     icon = {"PASS": "\u2705", "FAIL": "\u274c", "ERROR": "\u26a0\ufe0f", "SKIP": "\u23ed"}.get(r["verdict"], "?")
     gt = f"{r.get('expected', ''):>14}" if r.get('expected') is not None else f"{'N/A':>14}"
     fd_val = r.get('found') if r.get('found') is not None else r.get('closest')
     fd = f"{fd_val:>14}" if fd_val is not None else f"{'N/A':>14}"
-    print(f"  {r['id']:<5} {icon} {r['verdict']:<10} {gt} {fd}  {r['desc']:<45} {r.get('claimed_fix', '')}")
+    prov_short = f"[{r.get('prov_iter','?')}] {(r.get('provenance','') or '')[:30]}" if r.get('prov_iter') else ""
+    print(f"  {r['id']:<5} {icon} {r['verdict']:<10} {gt} {fd}  {r['desc']:<45} {r.get('claimed_fix', ''):<25} {prov_short}")
     if r["verdict"] == "PASS": disproved += 1
     elif r["verdict"] == "FAIL": confirmed += 1
     else: errors += 1
@@ -2756,7 +2856,7 @@ for prefix, name, count in [('A', 'Logistics (delivery_performance_by_region)', 
                              ('D', 'Supplier (supplier_performance_by_continent)', 7),
                              ('H', 'Hard Failures (wrong table / status / cross-domain)', 7),
                              ('G', 'Q3 Fiscal Calendar (UC Pages only)', 2),
-                             ('P', 'UC Pages (domain-specific critical thresholds)', 5)]:
+                             ('P', 'SQL Functions (domain-specific critical thresholds)', 5)]:
     hits = sum(1 for r in test_results if r['id'].startswith(prefix) and r['verdict'] == 'PASS')
     total_g = sum(1 for r in test_results if r['id'].startswith(prefix))
     print(f"    {name}: {hits}/{total_g} work at baseline")
@@ -2878,7 +2978,11 @@ def test_all_metrics(label):
         print(f"\n  \u274c FAILED ({len(fail_list)}):")
         for r in fail_list:
             closest_str = f"closest={r.get('closest')}" if r.get('closest') is not None else "no match"
-            print(f"    {r['id']:<5} gt={r['expected']:<14} {closest_str:<24} [{r.get('prov_iter','?')}] {r.get('desc','')}")
+            print(f"    {r['id']:<5} gt={r['expected']:<14} {closest_str:<24}")
+            print(f"           Expected fix: {r.get('claimed_fix','?')}")
+            print(f"           Agent used:   [{r.get('prov_iter','?')}] {r.get('provenance','')}")
+            if r.get('prov_expl'):
+                print(f"           Why:          {r.get('prov_expl','')}")
     if err_list:
         print(f"\n  \u26a0\ufe0f  ERRORS ({len(err_list)}):")
         for r in err_list:
@@ -3099,7 +3203,7 @@ if results:
         """Map provenance tier to reasoning confidence level.
         DETERMINISTIC = governed asset (metric view, SQL function, ref table) — repeatable.
         HEURISTIC = guided by UC comments/examples — likely repeatable.
-        BASELINE = raw table query — agent figured it out alone, may vary.
+        INFERRED = raw table query — agent figured it out alone, may vary.
         GUESSED = agent invented the answer — non-deterministic."""
         if tier in ('Iter 2', 'Iter 3'):
             return 'DETERMINISTIC'
@@ -3109,7 +3213,7 @@ if results:
             return 'GUESSED'
         if tier == 'N/A':
             return 'N/A'
-        return 'BASELINE'
+        return 'INFERRED'
 
     print("\n" + "="*90)
     print(f"  PROVENANCE ANALYSIS: {current_stage}")
@@ -3156,7 +3260,7 @@ if results:
         print(f"  {tier:42s}: {len(tests):2d} tests -> {p:2d} PASS ({pct}%), {f:2d} FAIL  [{ids}]")
 
     # Dynamic reasoning confidence — derived from provenance tiers, not pre-coded
-    conf_order = ['DETERMINISTIC', 'HEURISTIC', 'BASELINE', 'GUESSED', 'N/A']
+    conf_order = ['DETERMINISTIC', 'HEURISTIC', 'INFERRED', 'GUESSED', 'N/A']
     cat_counts = {}
     for r in results:
         tier = relabel_tier(r.get('prov_iter', 'Unknown'))
@@ -3210,7 +3314,7 @@ if results:
     cat_colors = {
         'DETERMINISTIC': '#1b5e20', # Governed asset — answer is repeatable
         'HEURISTIC': '#689f38',     # Guided by UC comments/examples
-        'BASELINE': '#f9a825',      # Raw table — agent figured it out alone
+        'INFERRED': '#f9a825',      # Raw table — agent figured it out alone
         'GUESSED': '#b71c1c',       # Agent invented the answer
         'N/A': '#757575',           # No SQL generated
     }
@@ -3244,7 +3348,7 @@ if results:
     reliability_patches = [
         Patch(facecolor='#1b5e20', label='DETERMINISTIC: governed asset (repeatable)'),
         Patch(facecolor='#689f38', label='HEURISTIC: guided by comments/examples'),
-        Patch(facecolor='#f9a825', label='BASELINE: raw table (may vary)'),
+        Patch(facecolor='#f9a825', label='INFERRED: raw table (may vary)'),
         Patch(facecolor='#b71c1c', label='GUESSED: agent invented it'),
     ]
     ax_llm.legend(handles=reliability_patches, loc='lower right', fontsize=8)
@@ -3572,7 +3676,7 @@ if results:
         if tier == 'Iter 1': return 'HEURISTIC'
         if tier.startswith('Guessed'): return 'GUESSED'
         if tier == 'N/A': return 'N/A'
-        return 'BASELINE'
+        return 'INFERRED'
 
     print("\n" + "="*90)
     print(f"  PROVENANCE ANALYSIS: {current_stage}")
@@ -3616,7 +3720,7 @@ if results:
         ids = ', '.join(t['id'] for t in tests)
         print(f"  {tier:42s}: {len(tests):2d} tests -> {p:2d} PASS ({pct}%), {f:2d} FAIL  [{ids}]")
 
-    conf_order = ['DETERMINISTIC', 'HEURISTIC', 'BASELINE', 'GUESSED', 'N/A']
+    conf_order = ['DETERMINISTIC', 'HEURISTIC', 'INFERRED', 'GUESSED', 'N/A']
     conf_counts = {}
     for r in results:
         tier = relabel_tier(r.get('prov_iter', 'Unknown'))
@@ -3658,7 +3762,7 @@ if results:
     ax_prov.set_xlim(0, max(p+f for p, f in zip(tier_pass, tier_fail)) + 8)
 
     cat_labels, cat_pass, cat_fail = [], [], []
-    cat_colors = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','BASELINE':'#f9a825',
+    cat_colors = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','INFERRED':'#f9a825',
                   'GUESSED':'#b71c1c','N/A':'#757575'}
     for conf in conf_order:
         if conf not in conf_counts: continue
@@ -3682,7 +3786,7 @@ if results:
     ax_llm.set_xlim(0, max(bars_total) + 5 if bars_total else 10)
     ax_llm.legend(handles=[Patch(facecolor='#1b5e20', label='DETERMINISTIC'),
         Patch(facecolor='#689f38', label='HEURISTIC'),
-        Patch(facecolor='#f9a825', label='BASELINE'),
+        Patch(facecolor='#f9a825', label='INFERRED'),
         Patch(facecolor='#b71c1c', label='GUESSED')],
         loc='lower right', fontsize=7)
     plt.tight_layout()
@@ -4124,7 +4228,7 @@ if results:
         if tier == 'Iter 1': return 'HEURISTIC'
         if tier.startswith('Guessed'): return 'GUESSED'
         if tier == 'N/A': return 'N/A'
-        return 'BASELINE'
+        return 'INFERRED'
 
     print("\n" + "="*90)
     print(f"  PROVENANCE ANALYSIS: {current_stage}")
@@ -4168,7 +4272,7 @@ if results:
         ids = ', '.join(t['id'] for t in tests)
         print(f"  {tier:42s}: {len(tests):2d} tests -> {p:2d} PASS ({pct}%), {f:2d} FAIL  [{ids}]")
 
-    conf_order = ['DETERMINISTIC', 'HEURISTIC', 'BASELINE', 'GUESSED', 'N/A']
+    conf_order = ['DETERMINISTIC', 'HEURISTIC', 'INFERRED', 'GUESSED', 'N/A']
     conf_counts = {}
     for r in results:
         tier = relabel_tier(r.get('prov_iter', 'Unknown'))
@@ -4209,7 +4313,7 @@ if results:
     ax_prov.set_xlim(0, max(p+f for p, f in zip(tier_pass, tier_fail)) + 8)
 
     cat_labels, cat_pass, cat_fail = [], [], []
-    cat_colors = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','BASELINE':'#f9a825',
+    cat_colors = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','INFERRED':'#f9a825',
                   'GUESSED':'#b71c1c','N/A':'#757575'}
     for conf in conf_order:
         if conf not in conf_counts: continue
@@ -4233,7 +4337,7 @@ if results:
     ax_llm.set_xlim(0, max(bars_total) + 5 if bars_total else 10)
     ax_llm.legend(handles=[Patch(facecolor='#1b5e20', label='DETERMINISTIC'),
         Patch(facecolor='#689f38', label='HEURISTIC'),
-        Patch(facecolor='#f9a825', label='BASELINE'),
+        Patch(facecolor='#f9a825', label='INFERRED'),
         Patch(facecolor='#b71c1c', label='GUESSED')],
         loc='lower right', fontsize=7)
     plt.tight_layout()
@@ -4481,8 +4585,8 @@ _recovery_assumptions = [
     ("H05","executive","What is the total revenue at risk from supply chain disruptions in Western region including cancelled revenue, backordered revenue, and wasted freight combined?",3138569.66,"Cross-domain: demand + logistics (no single agent has both)","CoD View (Iter 2)"),
     ("H06","inventory","What is the average revenue at risk per stockout SKU in Western region?",14368.63,"Cross-domain: inventory stockouts + demand revenue","Metric View (Iter 2)"),
     ("H07","executive","What is our total cost of supply chain disruptions as a ratio of Western region revenue?",1.12,"Cross-domain: CoD / revenue ratio","CoD View (Iter 2)"),
-    ("G01","executive","Are we going to miss our Q3 service-level targets?",95.0,"Q3 target (only in UC Pages, Q3=Jan-Mar fiscal)","UC Pages (Iter 3)"),
-    ("G02","executive","What is our Q3 service-level target?",95.0,"Q3 target value (not in any table)","UC Pages (Iter 3)"),
+    ("G01","executive","Are we going to miss our Q3 service-level targets?",95.0,"Q3 target (in fiscal_targets table, Q3=Jan-Mar fiscal)","fiscal_targets Table (Iter 3)"),
+    ("G02","executive","What is our Q3 service-level target?",95.0,"Q3 target value (in fiscal_targets table)","fiscal_targets Table (Iter 3)"),
     ("P01","logistics","How many shipments in August were flagged under the Logistics Risk Standards?",176,"Multi-condition: delay>=5 AND weight>800","SQL Function (Iter 3)"),
     ("P02","demand","How many Western region orders in August triggered a Demand Anomaly Alert?",77,"Multi-condition: qty>=8 AND price<30 AND Online","SQL Function (Iter 3)"),
     ("P03","inventory","How many inventory positions are classified as supply-risk under Inventory Standards?",106,"Multi-condition: dos 1-11 AND below_ss AND on_hand>0","SQL Function (Iter 3)"),
@@ -5232,10 +5336,70 @@ print("    \u2502  \u2705 Agent Mode API: also calls function correctly")
 print("    \u2502  Once added as source, P01-P05 should pass in both channels.")
 print("    \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
 
+# ── Step 6: Enhance Supervisor instructions for Iteration 3 ──
+# Appends a brief capability-awareness block to the supervisor's instructions.
+# Keeps it general — agents discover answers through their own semantic context.
+print("\n  Step 6: Enhancing Supervisor agent with Iteration 3 capabilities...")
+
+
+def _append_once(existing_text, addition_text, marker):
+    existing_text = existing_text or ""
+    if marker in existing_text:
+        return existing_text, False
+    sep = "\n\n" if existing_text.strip() else ""
+    return existing_text.rstrip() + sep + addition_text.strip(), True
+
+
+# Find the current supervisor agent created by 08_setup
+sup_list_resp = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers)
+if sup_list_resp.status_code != 200:
+    print(f"    \u2717 Could not list supervisor agents: {sup_list_resp.status_code} {sup_list_resp.text[:200]}")
+else:
+    supervisors = sup_list_resp.json().get("supervisor_agents", [])
+    supervisor = next((a for a in supervisors if "Supply Chain" in a.get("display_name", "")), None)
+    if not supervisor:
+        print("    \u2717 Supply Chain supervisor not found")
+    else:
+        supervisor_name = supervisor["name"]
+        print(f"    \u2713 Found supervisor: {supervisor_name}")
+
+        # Read current instructions so we ENHANCE them instead of replacing them.
+        sup_detail_resp = requests.get(f"{host}/api/2.1/{supervisor_name}", headers=headers)
+        sup_detail = sup_detail_resp.json() if sup_detail_resp.status_code == 200 else supervisor
+        current_instructions = sup_detail.get("instructions", supervisor.get("instructions", "")) or ""
+
+        iter3_supervisor_block = """
+ITERATION 3 CAPABILITIES
+- Your sub-agents have been enhanced with UC semantic features including metric views, SQL functions, certified queries, column comments, and governed tags. They discover and use these features autonomously to answer questions about business terms, policy thresholds, and cross-domain metrics.
+- For cross-domain questions spanning multiple schemas (e.g. Cost of Disruption, revenue at risk), route to executive-reporting first — it has pre-built cross-domain views.
+- For domain-specific policy terms (e.g. Logistics Risk Standards, Demand Anomaly Alert, Procurement Quality Minimum), route to the owning domain agent — it has the context to resolve the term.
+- This organization uses a July fiscal year start. Q3 = Jan-Mar (NOT calendar Jul-Sep). For Q3 target questions, route to executive-reporting.
+"""
+
+        enhanced_instructions, changed = _append_once(
+            current_instructions,
+            iter3_supervisor_block,
+            "ITERATION 3 CAPABILITIES"
+        )
+
+        if changed:
+            patch_resp = requests.patch(
+                f"{host}/api/2.1/{supervisor_name}?update_mask=instructions",
+                headers=headers,
+                json={"instructions": enhanced_instructions}
+            )
+            if patch_resp.status_code == 200:
+                print(f"    \u2713 Supervisor instructions enhanced ({len(current_instructions)} -> {len(enhanced_instructions)} chars)")
+            else:
+                print(f"    \u2717 Supervisor instruction PATCH failed: {patch_resp.status_code} {patch_resp.text[:200]}")
+        else:
+            print("    (skip) Supervisor instructions already include Iteration 3 block")
+
 print("\n\u2705 Iteration 3 SETUP COMPLETE:")
 print("   \u2713 fiscal_targets table added to Executive agent (fixes G01/G02)")
 print("   \u2713 5 SQL threshold functions created in catalog")
 print("   \u2713 UC Pages on Discover page (work via Genie One, not Genie Agents)")
+print("   \u2713 Supervisor enhanced with Iteration 3 capability awareness")
 print("")
 print("  \u26d4 STOP HERE \u2014 Add SQL functions to each agent via the UI before continuing.")
 print("     See the table above (Step 5) for which function goes to which agent.")
@@ -5295,7 +5459,7 @@ if results:
         if tier == 'Iter 1': return 'HEURISTIC'
         if tier.startswith('Guessed'): return 'GUESSED'
         if tier == 'N/A': return 'N/A'
-        return 'BASELINE'
+        return 'INFERRED'
 
     print("\n" + "="*90)
     print(f"  PROVENANCE ANALYSIS: {current_stage}")
@@ -5339,7 +5503,7 @@ if results:
         ids = ', '.join(t['id'] for t in tests)
         print(f"  {tier:42s}: {len(tests):2d} tests -> {p:2d} PASS ({pct}%), {f:2d} FAIL  [{ids}]")
 
-    conf_order = ['DETERMINISTIC', 'HEURISTIC', 'BASELINE', 'GUESSED', 'N/A']
+    conf_order = ['DETERMINISTIC', 'HEURISTIC', 'INFERRED', 'GUESSED', 'N/A']
     conf_counts = {}
     for r in results:
         tier = relabel_tier(r.get('prov_iter', 'Unknown'))
@@ -5380,7 +5544,7 @@ if results:
     ax_prov.set_xlim(0, max(p+f for p, f in zip(tier_pass, tier_fail)) + 8)
 
     cat_labels, cat_pass, cat_fail = [], [], []
-    cat_colors = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','BASELINE':'#f9a825',
+    cat_colors = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','INFERRED':'#f9a825',
                   'GUESSED':'#b71c1c','N/A':'#757575'}
     for conf in conf_order:
         if conf not in conf_counts: continue
@@ -5404,7 +5568,7 @@ if results:
     ax_llm.set_xlim(0, max(bars_total) + 5 if bars_total else 10)
     ax_llm.legend(handles=[Patch(facecolor='#1b5e20', label='DETERMINISTIC'),
         Patch(facecolor='#689f38', label='HEURISTIC'),
-        Patch(facecolor='#f9a825', label='BASELINE'),
+        Patch(facecolor='#f9a825', label='INFERRED'),
         Patch(facecolor='#b71c1c', label='GUESSED')],
         loc='lower right', fontsize=7)
     plt.tight_layout()
@@ -5524,17 +5688,17 @@ def _conf(tier):
     if tier == 'Iter 1': return 'HEURISTIC'
     if 'Guessed' in str(tier) or tier == 'GUESSED': return 'GUESSED'
     if tier == 'N/A': return 'N/A'
-    return 'BASELINE'
+    return 'INFERRED'
 
 converged, stayed_baseline, stayed_det, regressed_prov = [], [], [], []
 for aid in sorted(test_history.keys()):
     hist = test_history[aid]
     if len(hist) < 2: continue
     first_c, last_c = _conf(hist[0]['prov_iter']), _conf(hist[-1]['prov_iter'])
-    if first_c == 'BASELINE' and last_c == 'DETERMINISTIC': converged.append(aid)
-    elif first_c == last_c == 'BASELINE': stayed_baseline.append(aid)
+    if first_c == 'INFERRED' and last_c == 'DETERMINISTIC': converged.append(aid)
+    elif first_c == last_c == 'INFERRED': stayed_baseline.append(aid)
     elif first_c == last_c == 'DETERMINISTIC': stayed_det.append(aid)
-    elif first_c in ('DETERMINISTIC','HEURISTIC') and last_c in ('BASELINE','GUESSED'): regressed_prov.append(aid)
+    elif first_c in ('DETERMINISTIC','HEURISTIC') and last_c in ('INFERRED','GUESSED'): regressed_prov.append(aid)
 
 print(f"\n  \u2705 Converged to DETERMINISTIC: {len(converged)} tests (Baseline \u2192 governed asset)")
 if converged: print(f"     {', '.join(converged)}")
@@ -5600,7 +5764,7 @@ for aid in sorted(test_history.keys()):
 
 print(f"\n  {'Confidence':<16} {'Tests':>6} {'Pass Rate':>10} {'SQL Stable':>12} {'Value Stable':>14} {'Prod Ready?':>13}")
 print(f"  {'\u2500'*16} {'\u2500'*6} {'\u2500'*10} {'\u2500'*12} {'\u2500'*14} {'\u2500'*13}")
-for conf in ['DETERMINISTIC','HEURISTIC','BASELINE','GUESSED','N/A']:
+for conf in ['DETERMINISTIC','HEURISTIC','INFERRED','GUESSED','N/A']:
     s = tier_stats.get(conf)
     if not s or s['n'] == 0: continue
     pr = 100*s['passes']/max(s['runs'],1)
@@ -5679,9 +5843,9 @@ ax1.legend(fontsize=8)
 
 # Panel 2: Reliability by confidence tier
 ax2 = axes[1]
-tier_color_map = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','BASELINE':'#f9a825','GUESSED':'#b71c1c'}
+tier_color_map = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','INFERRED':'#f9a825','GUESSED':'#b71c1c'}
 conf_labels, conf_pass_rates, conf_bar_colors = [], [], []
-for conf in ['DETERMINISTIC','HEURISTIC','BASELINE','GUESSED']:
+for conf in ['DETERMINISTIC','HEURISTIC','INFERRED','GUESSED']:
     s = tier_stats.get(conf)
     if not s or s['n'] == 0: continue
     conf_labels.append(conf)
@@ -5843,7 +6007,7 @@ def _conf_robust(tier):
     if tier == 'Iter 1': return 'HEURISTIC'
     if 'Guessed' in str(tier) or tier == 'GUESSED': return 'GUESSED'
     if tier == 'N/A': return 'N/A'
-    return 'BASELINE'
+    return 'INFERRED'
 
 # ── Run all variations ──
 robustness_results = []
@@ -5936,7 +6100,7 @@ for r in robustness_results:
     tier_robust[conf]['total'] += 1
     if r['verdict'] == 'PASS': tier_robust[conf]['pass'] += 1
 
-for conf in ['DETERMINISTIC', 'HEURISTIC', 'BASELINE', 'GUESSED']:
+for conf in ['DETERMINISTIC', 'HEURISTIC', 'INFERRED', 'GUESSED']:
     s = tier_robust.get(conf)
     if not s or s['total'] == 0: continue
     rpct = 100 * s['pass'] // s['total']
@@ -6141,8 +6305,8 @@ ax4.text(5, 4.4, f'{total_pass}/{total_run} total variations passed ({robust_pct
 # Governance comparison
 gov_pass = tier_robust.get('DETERMINISTIC', {}).get('pass', 0)
 gov_total = tier_robust.get('DETERMINISTIC', {}).get('total', 0)
-base_pass = tier_robust.get('BASELINE', {}).get('pass', 0)
-base_total = tier_robust.get('BASELINE', {}).get('total', 0)
+base_pass = tier_robust.get('INFERRED', {}).get('pass', 0)
+base_total = tier_robust.get('INFERRED', {}).get('total', 0)
 guess_pass = tier_robust.get('GUESSED', {}).get('pass', 0)
 guess_total = tier_robust.get('GUESSED', {}).get('total', 0)
 
