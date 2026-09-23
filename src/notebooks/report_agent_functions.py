@@ -117,22 +117,7 @@ print(f"\u2713 Catalog: {CAT}")
 # ============================================================
 
 CANONICAL_PROMPT = (
-    "We need a complete supply chain health check for our West region in August 2026. "
-    "The CFO wants to understand what drove the revenue decline versus July — "
-    "show the actual August and July revenue numbers, the dollar change, and the percentage change — "
-    "and which product families are most at fault. "
-    "Are our on-time delivery rate and average delay for West region shipments contributing to the problem? "
-    "How many total shipments went out and how many were late? "
-    "I also need our current fill rate, how many inventory positions are sitting below safety stock "
-    "in the West region, how many unique SKUs are affected, what is our days of supply for those at-risk items, "
-    "and how many SKUs are completely stocked out. "
-    "On the vendor side: what percentage of vendors delivered late in August, "
-    "how many purchase orders were late out of total, what is the average lead time variance, "
-    "and what are the total vendor SLA penalties we have incurred? "
-    "Bring it all together as our total Cost of Disruption by region for last month Aug 26 — "
-    "cancelled revenue, at-risk backorder revenue, wasted freight on late shipments, "
-    "and supplier penalty exposure in one number per region. "
-    "Are we going to miss our Q3 service-level targets, and what are the top actions we should take?\n\n"
+    "We need a complete supply chain health check for our West region in August 2026. The CFO wants to understand what drove the revenue decline versus July — show the actual August and July revenue numbers, the dollar change, and the percentage change — and which product families are most at fault. Are our on-time delivery rate and average delay for West region shipments contributing to the problem? How many total shipments went out and how many were late? I also need our current fill rate, how many inventory positions are sitting below safety stock in the West region, how many unique SKUs are affected, what is our days of supply for those at-risk items, and how many SKUs are completely stocked out. On the vendor side: what percentage of vendors delivered late in August, how many purchase orders were late out of total, what is the average lead time variance, and what are the total vendor SLA penalties we have incurred? Bring it all together as our total Cost of Disruption by region for last month Aug 26 — cancelled revenue, at-risk backorder revenue, wasted freight on late shipments, and supplier penalty exposure in one number per region. Are we going to miss our Q3 service-level targets, and what are the top actions we should take? Additionally, how many shipments in August were flagged under the Logistics Risk Standards, how many Western region orders in August triggered a Demand Anomaly Alert, how many inventory positions are classified as supply-risk under Inventory Standards, how many supplier orders last month fell below the Procurement Quality Minimum, and how many suppliers exceeded the Executive Disruption Threshold?"
     "IMPORTANT: For the recommended actions section, format each action as a structured item with: "
     "(1) a clear ACTION TITLE, (2) TIMEFRAME: Immediate/7 days, Short-term/30 days, or Strategic/90 days, "
     "(3) DOMAIN: which supply chain domain it addresses (inventory, logistics, supplier, demand, or finance), "
