@@ -985,7 +985,8 @@ def analyze_agent_sql(sql_text, test_id, reference_sql=None, narration=None, que
 PROVENANCE_INSTRUCTION = """
 
 PROVENANCE REQUIREMENT: After every analytical answer, append exactly one line:
-[PROVENANCE: tables={table_names}, key_columns={column_names}, assumed_thresholds={none_or_values}, method={metric_view|base_table|computed|assumed_definition}]
+[PROVENANCE: tables={table_names}, key_columns={column_names}, assumed_thresholds={none_or_values}, method={metric_view|sql_function|base_table|computed|assumed_definition}, uc_feature={name_of_view_or_function_if_used}]
+If you used a metric view, name it. If you called a SQL function (get_critical_*), name it.
 If you assumed any threshold or business definition not in the data, say so explicitly.
 """
 
@@ -1568,7 +1569,38 @@ else:
 # MAGIC %md
 # MAGIC ## Test Suite: 45 Questions × 5 Genie Agents
 # MAGIC
-# MAGIC Each question is sent to a **specific domain agent** and the response is compared against a ground truth value at **exact 2-decimal precision**. No tolerance bands — either it matches or it doesn't.
+# MAGIC ### The Business Prompt (sent to Supervisor Agent)
+# MAGIC
+# MAGIC The entire test suite is derived from a single CFO-style prompt. This is what the Supervisor receives:
+# MAGIC
+# MAGIC > *"We need a complete supply chain health check for our West region in August 2026. The CFO wants to understand what drove the revenue decline versus July — show the actual August and July revenue numbers, the dollar change, and the percentage change — and which product families are most at fault. Are our on-time delivery rate and average delay for West region shipments contributing to the problem? How many total shipments went out and how many were late? I also need our current fill rate, how many inventory positions are sitting below safety stock in the West region, how many unique SKUs are affected, what is our days of supply for those at-risk items, and how many SKUs are completely stocked out. On the vendor side: what percentage of vendors delivered late in August, how many purchase orders were late out of total, what is the average lead time variance, and what are the total vendor SLA penalties we have incurred? Bring it all together as our total Cost of Disruption by region for last month Aug 26 — cancelled revenue, at-risk backorder revenue, wasted freight on late shipments, and supplier penalty exposure in one number per region. Are we going to miss our Q3 service-level targets, and what are the top actions we should take? Additionally, how many shipments in August were flagged under the Logistics Risk Standards, how many Western region orders in August triggered a Demand Anomaly Alert, how many inventory positions are classified as supply-risk under Inventory Standards, how many supplier orders last month fell below the Procurement Quality Minimum, and how many suppliers exceeded the Executive Disruption Threshold?"*
+# MAGIC
+# MAGIC ### How the Curator Broke It Down into 45 Tests
+# MAGIC
+# MAGIC The Curator extracted every testable metric from the prompt, then **expanded** with edge cases, failure traps, and cross-domain challenges. Each row below shows which prompt fragment produced which tests — and why additional tests were added beyond the literal ask.
+# MAGIC
+# MAGIC | Prompt Fragment | Direct Tests | Additional Edge-Case Tests | Why the extras |
+# MAGIC | --- | --- | --- | --- |
+# MAGIC | *"revenue decline versus July — August and July revenue, dollar change, percentage change"* | B01 (Aug rev), B02 (Jul rev), B03 (\$ change), B04 (% change) | F01 ("West" synonym), F06 (product family decline) | F01 tests if agent maps "West" → "Western". F06 tests if agent can rank families. |
+# MAGIC | *"on-time delivery rate and average delay"* | A01 (OTD rate), A03 (avg delay) | A02 (late rate = complement of OTD) | A02 verifies the agent computes the inverse correctly. |
+# MAGIC | *"How many total shipments went out and how many were late?"* | A04 (total), A05 (late) | A06 (wasted freight cost) | A06 extends to dollar impact — not asked but derivable. |
+# MAGIC | *"current fill rate"* | E01 (fill rate) | — | Synonym test: fill\_rate = service\_level\_pct. |
+# MAGIC | *"inventory positions below safety stock, unique SKUs, days of supply, stocked out"* | C01 (positions), C02 (SKUs), C05 (DoS), C03 (stockouts), C04 (stockout SKUs) | — | 5 distinct metrics from one sentence. |
+# MAGIC | *"percentage of vendors delivered late, POs late out of total, lead time variance, SLA penalties"* | D03 (late %), D01 (total POs), D02 (late POs), D04 (avg LTV), E02 (SLA penalties) | D05-D07 (Asia breakdown), F02 ("vendors" ambiguity) | D05-D07 test continent drill-down. F02 traps per-vendor vs per-order confusion. |
+# MAGIC | *"Cost of Disruption by region"* | E03 (total CoD) | H05 (component sum), H06 (per-SKU ratio), H07 (CoD/revenue ratio) | H05-H07 test cross-domain joins that no single agent owns. |
+# MAGIC | *"miss our Q3 service-level targets"* | G01 (will we miss?), G02 (what is the target?) | — | Q3 = fiscal Jan-Mar (not calendar). Target (95%) only in fiscal\_targets table. |
+# MAGIC | *"Logistics Risk Standards"* | P01 (flagged shipments = 176) | — | Multi-condition policy: delay >= 5 AND weight > 800. Agent must learn from SQL Function. |
+# MAGIC | *"Demand Anomaly Alert"* | P02 (anomaly orders = 77) | — | Multi-condition: qty >= 8 AND price < 30 AND Online. |
+# MAGIC | *"supply-risk under Inventory Standards"* | P03 (risk positions = 106) | — | Multi-condition: DoS 1-11 AND below\_ss AND on\_hand > 0. |
+# MAGIC | *"Procurement Quality Minimum"* | P04 (below-minimum orders = 11) | — | Multi-condition: score < 75 AND LTV > 12. |
+# MAGIC | *"Executive Disruption Threshold"* | P05 (at-risk suppliers = 3) | — | Multi-condition: risk < 55 AND LTV > 8 AND penalty > 80K. |
+# MAGIC | *(not in prompt — Curator-added traps)* | — | H01-H02 (wrong-table trap), H03-H04 (status ambiguity), F03-F05 (status filter) | H01-H02: agent picks `supplier_lead_times` instead of `supplier_orders`. H03-H04: `Fulfilled` vs `Partially_Fulfilled` distinction. F03-F05: filtered counts by order status. |
+# MAGIC
+# MAGIC **Summary**: 25 tests come directly from the prompt. 20 are Curator-added edge cases that expose fragility — agents may get the direct question right by coincidence but fail on variations that require genuine understanding.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC Each question below is sent to a **specific domain agent** and the response is compared against a ground truth value at **exact 2-decimal precision**. No tolerance bands — either it matches or it doesn't.
 # MAGIC
 # MAGIC ### Group A: Logistics (6 tests → `SC Logistics` agent)
 # MAGIC
@@ -1662,9 +1694,9 @@ else:
 
 # COMMAND ----------
 
-# DBTITLE 1,ASSUMPTION TESTER v3: All metric view measures + indirect GTs (BASELINE)
+# DBTITLE 1,CURATOR BENCHMARKS: 45 tests across 9 domain groups (BASELINE)
 # ============================================================
-# ASSUMPTION TESTER v3 — COMPREHENSIVE
+# CURATOR BENCHMARKS — COMPREHENSIVE
 # Tests EVERY metric from the 4 metric views + CoD view + indirect GTs.
 # Groups: (A) Logistics MV, (B) Demand MV, (C) Inventory MV,
 #         (D) Supplier MV, (E) Cross-domain/Executive, (F) Indirect GTs.
@@ -1842,7 +1874,7 @@ def print_boxed_block(title, content):
 
 
 print("\n" + "="*90)
-print("  ASSUMPTION TESTER v3: Comprehensive \u2014 ALL metric view measures + indirect GTs")
+print("  CURATOR BENCHMARKS: Comprehensive \u2014 ALL metric view measures + indirect GTs")
 print("="*90)
 
 # ============================================================
@@ -1991,29 +2023,29 @@ assumptions = [
     # \u2500\u2500 GROUP G: Q3 Fiscal Calendar Confusion (UC Pages) \u2500\u2500
     ("G01", "executive",
      "Are we going to miss our Q3 service-level targets?",
-     95.0, "Q3 target (in fiscal_targets table, Q3=Jan-Mar fiscal)", "fiscal_targets Table (Iter 3)"),
+     95.0, "Q3 target (in fiscal_targets table, Q3=Jan-Mar fiscal)", "Reference Table (Iter 3)"),
     ("G02", "executive",
      "What is our Q3 service-level target?",
-     95.0, "Q3 target value (in fiscal_targets table)", "fiscal_targets Table (Iter 3)"),
+     95.0, "Q3 target value (in fiscal_targets table)", "Reference Table (Iter 3)"),
 
     # ── GROUP P: UC PAGES ONLY — domain-specific "critical" thresholds ──
     # Domain-specific POLICY NAMES — each defined only in its UC Page.
     # Without the UC Page, agent cannot map policy names to column thresholds.
     ("P01", "logistics",
      "How many shipments in August were flagged under the Logistics Risk Standards?",
-     176, "UC Page: Logistics Risk = delay >= 5 AND weight > 800", "SQL Function (Iter 3)"),
+     176, "UC Page: Logistics Risk = delay >= 5 AND weight > 800", "UC Pages / SQL Function (Iter 3)"),
     ("P02", "demand",
      "How many Western region orders in August triggered a Demand Anomaly Alert?",
-     77, "UC Page: Demand Anomaly = qty >= 8 AND price < 30 AND Online", "SQL Function (Iter 3)"),
+     77, "UC Page: Demand Anomaly = qty >= 8 AND price < 30 AND Online", "UC Pages / SQL Function (Iter 3)"),
     ("P03", "inventory",
      "How many inventory positions are classified as supply-risk under Inventory Standards?",
-     106, "UC Page: Inventory Risk = dos 1-11 AND below_ss AND on_hand > 0", "SQL Function (Iter 3)"),
+     106, "UC Page: Inventory Risk = dos 1-11 AND below_ss AND on_hand > 0", "UC Pages / SQL Function (Iter 3)"),
     ("P04", "supplier",
      "How many supplier orders last month fell below the Procurement Quality Minimum?",
-     11, "UC Page: Procurement Quality = score < 75 AND ltv > 12", "SQL Function (Iter 3)"),
+     11, "UC Page: Procurement Quality = score < 75 AND ltv > 12", "UC Pages / SQL Function (Iter 3)"),
     ("P05", "executive",
      "How many suppliers exceeded the Executive Disruption Threshold?",
-     3, "UC Page: Exec Disruption = risk < 55 AND ltv > 8 AND penalty > 80K", "SQL Function (Iter 3)"),
+     3, "UC Page: Exec Disruption = risk < 55 AND ltv > 8 AND penalty > 80K", "UC Pages / SQL Function (Iter 3)"),
 ]
 
 GT_QUERIES = {
@@ -2721,26 +2753,59 @@ def detect_provenance(sql, aid):
     # Iter 3 creates SQL FUNCTIONS (get_critical_*) as the workaround.
     # If agent calls the function → SQL Function (Iter 3).
     # If agent just hardcodes the threshold → GUESSED (agent invented it).
+    # --- Iter 3: SQL Functions — definition-only (agent reads definition, writes own SQL) ---
+    # The function name won't appear in the output SQL. Instead, check if ALL
+    # conditions from the function definition appear in the agent's query.
+    # Each condition group = list of alternative markers (at least one must match).
     sql_func_map = {
-        'P01': ('get_critical_delay_shipments', 'total_weight_kg', ['>= 5', '>=5', '> 800', '>800'], 5),
-        'P02': ('get_critical_accuracy_forecasts', 'unit_price', ['>= 8', '>=8', '< 30', '<30'], 8),
-        'P03': ('get_critical_supply_positions', 'on_hand_qty', ['between 1 and 11', '< 12', '<12'], 11),
-        'P04': ('get_critical_quality_orders', 'lead_time_variance', ['< 75', '<75', '> 12', '>12'], 75),
-        'P05': ('get_critical_disruption_regions', 'composite_risk_score', ['< 55', '<55', '> 80000', '>80000'], 55),
+        'P01': ('get_critical_delay_shipments', [
+            ['delay_days'], ['total_weight_kg'],
+            ['>= 5', '>=5'], ['> 800', '>800'],
+        ]),
+        'P02': ('get_critical_accuracy_forecasts', [
+            ['quantity'], ['unit_price'], ['channel'],
+            ['>= 8', '>=8'], ['< 30', '<30'],
+        ]),
+        'P03': ('get_critical_supply_positions', [
+            ['days_of_supply'], ['below_safety_stock'],
+            ['on_hand_qty', 'on_hand'],
+            ['between 1 and 11'],
+        ]),
+        'P04': ('get_critical_quality_orders', [
+            ['quality_score'], ['lead_time_variance'],
+            ['< 75', '<75'], ['> 12', '>12'],
+        ]),
+        'P05': ('get_critical_disruption_regions', [
+            ['composite_risk_score'], ['lead_time_variance'],
+            ['total_penalty_usd'],
+            ['< 55', '<55'], ['> 80000', '>80000'],
+        ]),
     }
     if aid in sql_func_map:
-        func_name, col_name, threshold_strs, threshold_val = sql_func_map[aid]
-        # Priority 1: Agent called the SQL function directly
+        func_name, condition_groups = sql_func_map[aid]
+        # Priority 1: Agent called the SQL function directly (unlikely for definition-only)
         if func_name in sql_lower:
             return ('Iter 3', f'SQL Function: {func_name}()',
-                    f'Agent called the SQL function (created in Iter 3 as workaround for UC Pages)')
-        # Priority 2: Agent hardcoded the threshold — this is a GUESS
-        if col_name in sql_lower and any(t in sql for t in threshold_strs):
-            return ('GUESSED', f'GUESSED threshold: {col_name} @ {threshold_val} (matches GT but agent invented it)',
-                    f'Agent guessed threshold {threshold_val} — Genie CANNOT access UC Pages. '
-                    f'Correct value happens to match GT. Rephrase may yield different threshold.')
+                    f'Agent called the SQL function directly')
+        # Priority 2: Check how many condition groups from the function definition match
+        # Definition-only functions: agent reads definition then writes own SQL.
+        # ALL groups matching = strong evidence of function usage (API hides internal reasoning).
+        groups_matched = sum(
+            1 for group in condition_groups
+            if any(marker in sql_lower for marker in group)
+        )
+        total_groups = len(condition_groups)
+        if groups_matched == total_groups:
+            return ('Iter 3 (inferred)', f'SQL Function (inferred): all {total_groups} conditions match {func_name}',
+                    f'Agent SQL matches ALL {total_groups} conditions from {func_name}() definition. '
+                    f'API does not expose internal reasoning, but full multi-condition match '
+                    f'is strong evidence the agent consulted the function.')
+        elif groups_matched > 0:
+            return ('GUESSED', f'Partial match ({groups_matched}/{total_groups} conditions vs {func_name})',
+                    f'Only {groups_matched} of {total_groups} condition groups match — '
+                    f'insufficient evidence of function usage.')
     # --- Baseline: Raw table query ---
-    return ('Baseline', 'Direct query (no UC feature needed)',
+    return ('Raw Table', 'Direct query (no UC feature needed)',
             'Agent answered correctly from raw tables alone — no UC semantic feature required')
 
 
@@ -2810,7 +2875,7 @@ for i, (aid, agent_key, question, expected, desc, claimed_fix) in enumerate(assu
 # SUMMARY TABLE \u2014 grouped by metric view
 # ============================================================
 print(f"\n\n{'='*100}")
-print("  ASSUMPTION TEST SUMMARY \u2014 v3 COMPREHENSIVE")
+print("  CURATOR BENCHMARK SUMMARY \u2014 v3 COMPREHENSIVE")
 print(f"{'='*100}")
 print(f"  {'ID':<5} {'Result':<12} {'GT':>14} {'Found':>14}  {'Description':<45} {'Expected Fix':<25} {'Agent Used'}")
 print(f"  {'\u2500'*5} {'\u2500'*12} {'\u2500'*14} {'\u2500'*14}  {'\u2500'*45} {'\u2500'*25} {'\u2500'*35}")
@@ -2908,13 +2973,11 @@ def test_all_metrics(label):
                             "provenance": "N/A", "prov_iter": "N/A", "sql": None})
             continue
         sql, narration, rows, cols = extract_from_msg(msg)
-        # Show agent SQL
+        # Show agent SQL (full — no truncation)
         if sql:
             print(f"  \u250c\u2500 AGENT SQL \u2500\u2500\u2500")
-            for line in sql.strip().split("\n")[:8]:
+            for line in sql.strip().split("\n"):
                 print(f"  \u2502 {line}")
-            if len(sql.strip().split("\n")) > 8:
-                print(f"  \u2502 ... ({len(sql.strip().split(chr(10)))} lines)")
             print(f"  \u2514{'\u2500'*70}")
         else:
             print(f"  \u250c\u2500 AGENT SQL: (none \u2014 answered from narration only) \u2500\u2500\u2500")
@@ -2923,24 +2986,25 @@ def test_all_metrics(label):
         gt_note = GT_QUERY_NOTES.get(aid)
         if gt_sql:
             print(f"  \u250c\u2500 GT REFERENCE SQL \u2500\u2500\u2500")
-            for line in gt_sql.strip().split("\n")[:6]:
+            for line in gt_sql.strip().split("\n"):
                 print(f"  \u2502 {line}")
             print(f"  \u2514{'\u2500'*70}")
         elif gt_note:
             print(f"  GT Note: {gt_note}")
-        # Show narration (first 3 lines)
+        # Show full narration (no truncation)
         if narration:
             print(f"  \u250c\u2500 NARRATION \u2500\u2500\u2500")
-            for line in narration.split("\n")[:3]:
-                print(f"  \u2502 {line[:120]}")
-            if len(narration.split("\n")) > 3:
-                print(f"  \u2502 ... ({len(narration.split(chr(10)))} lines)")
+            for line in narration.split("\n"):
+                print(f"  \u2502 {line}")
             print(f"  \u2514{'\u2500'*70}")
-        # Show result rows if any
+        # Show result rows
         if rows:
-            print(f"  Result rows: {len(rows)} (cols: {', '.join(cols[:6])})")
-            for row in rows[:2]:
-                print(f"    {row}")
+            print(f"  \u250c\u2500 QUERY RESULT ROWS ({len(rows)} rows, cols: {', '.join(cols)}) \u2500\u2500\u2500")
+            for i, row in enumerate(rows[:10]):
+                print(f"  \u2502 [{i}] {row}")
+            if len(rows) > 10:
+                print(f"  \u2502 ... ({len(rows)} total rows)")
+            print(f"  \u2514{'\u2500'*70}")
         # Value match
         all_text = (narration or "") + " " + (sql or "")
         for row in rows:
@@ -2951,16 +3015,27 @@ def test_all_metrics(label):
         icon = "\u2705" if match else "\u274c"
         val_str = f"found={found}" if found is not None else f"closest={closest}"
         # Reasoning confidence (derived dynamically from provenance tier)
-        if prov_iter in ('Iter 2', 'Iter 3'): conf = 'DETERMINISTIC'
+        if prov_iter in ('Iter 2', 'Iter 3') or prov_iter.startswith('Iter 3'): conf = 'DETERMINISTIC'
         elif prov_iter == 'Iter 1': conf = 'HEURISTIC'
         elif 'Guessed' in str(prov_iter) or prov_iter == 'GUESSED': conf = 'GUESSED'
         elif prov_iter == 'N/A': conf = 'N/A'
-        else: conf = 'BASELINE'
-        print(f"\n  {icon} VERDICT: {verdict} (gt={expected}, {val_str})")
-        print(f"  UC Feature: [{prov_iter}] {prov_feature}")
-        if prov_expl:
-            print(f"  Provenance: {prov_expl}")
-        print(f"  Confidence: {conf}")
+        else: conf = 'INFERRED'
+        # \u2500\u2500 PROVENANCE & EVALUATOR ASSESSMENT \u2500\u2500
+        conf_desc = {
+            'DETERMINISTIC': 'Grounded in governed UC asset \u2014 answer is repeatable across runs',
+            'HEURISTIC': 'Guided by metadata (comments/examples) \u2014 likely repeatable',
+            'INFERRED': 'Agent inferred from raw column/table names \u2014 may vary across runs',
+            'GUESSED': 'Agent invented thresholds \u2014 unreliable without UC feature',
+            'N/A': 'No SQL generated \u2014 cannot assess',
+        }.get(conf, 'Unknown')
+        print(f"\n  \u250c\u2500 PROVENANCE & EVALUATOR ASSESSMENT \u2500\u2500\u2500")
+        print(f"  \u2502 Verdict:      {icon} {verdict} (gt={expected}, {val_str})")
+        print(f"  \u2502 UC Feature:   [{prov_iter}] {prov_feature}")
+        print(f"  \u2502 Provenance:   {prov_expl}")
+        print(f"  \u2502 Confidence:   {conf}")
+        print(f"  \u2502 Assessment:   {conf_desc}")
+        print(f"  \u2502 Claimed Fix:  {claimed_fix}")
+        print(f"  \u2514{'\u2500'*70}")
         results.append({"id": aid, "verdict": verdict, "desc": desc, "claimed_fix": claimed_fix,
                         "expected": expected, "found": found, "closest": closest,
                         "provenance": prov_feature, "prov_iter": prov_iter, "sql": sql,
@@ -3021,16 +3096,14 @@ def test_failing_metrics(label=""):
         print_boxed_block("GROUND TRUTH SQL", gt_sql or gt_note)
         if narration:
             print(f"  \u250c\u2500 NARRATION \u2500\u2500\u2500")
-            for line in narration.split("\n")[:5]:
+            for line in narration.split("\n"):
                 print(f"  \u2502 {line}")
-            if len(narration.split("\n")) > 5:
-                print(f"  \u2502 ...")
             print(f"  \u2514{'\u2500'*70}")
         if rows:
             print(f"  \u250c\u2500 RESULT ({len(rows)} rows) \u2500\u2500\u2500")
-            for i, row in enumerate(rows[:3]):
+            for i, row in enumerate(rows[:10]):
                 print(f"  \u2502 [{i}] {row}")
-            if len(rows) > 3:
+            if len(rows) > 10:
                 print(f"  \u2502 ... ({len(rows)} total)")
             print(f"  \u2514{'\u2500'*70}")
         all_text = (narration or "") + " " + (sql or "")
@@ -3170,7 +3243,7 @@ plot_test_dashboard(all_stage_results, all_comp_results if 'all_comp_results' in
 
 # ── Provenance Analysis: Extracted from EXISTING test results ──
 # Each test result already contains: provenance, prov_iter, sql
-# detect_provenance() was called during the test run (cell 6).
+# detect_provenance() was called during the test run (cell 7).
 # LLM_REASONING dict provides pre-coded semantic reasoning.
 # NO probes, NO instruction patching — just analysis of captured data.
 
@@ -3184,9 +3257,9 @@ if results:
     # matching the Iter 1 pattern without any UC features being applied yet.
     ran_stages = set(all_stage_results.keys())
     iter_actually_ran = {
-        'Iter 1': any('iter 1' in s.lower() or 'iter1' in s.lower() for s in ran_stages),
-        'Iter 2': any('iter 2' in s.lower() or 'iter2' in s.lower() for s in ran_stages),
-        'Iter 3': any('iter 3' in s.lower() or 'iter3' in s.lower() for s in ran_stages),
+        'Iter 1': any('iteration 1' in s.lower() or 'iter 1' in s.lower() or 'iter1' in s.lower() for s in ran_stages),
+        'Iter 2': any('iteration 2' in s.lower() or 'iter 2' in s.lower() or 'iter2' in s.lower() for s in ran_stages),
+        'Iter 3': any('iteration 3' in s.lower() or 'iter 3' in s.lower() or 'iter3' in s.lower() for s in ran_stages),
     }
 
     def relabel_tier(raw_tier):
@@ -3205,7 +3278,7 @@ if results:
         HEURISTIC = guided by UC comments/examples — likely repeatable.
         INFERRED = raw table query — agent figured it out alone, may vary.
         GUESSED = agent invented the answer — non-deterministic."""
-        if tier in ('Iter 2', 'Iter 3'):
+        if tier in ('Iter 2', 'Iter 3') or tier.startswith('Iter 3'):
             return 'DETERMINISTIC'
         if tier == 'Iter 1':
             return 'HEURISTIC'
@@ -3248,7 +3321,7 @@ if results:
     print(f"\n{'='*90}")
     print(f"  PROVENANCE SUMMARY BY TIER")
     print(f"{'='*90}")
-    tier_order = ['Baseline', 'Guessed (Iter 1)', 'Guessed (Iter 2)', 'Guessed (Iter 3)', 'Guessed (threshold)', 'Iter 1', 'Iter 2', 'Iter 3', 'N/A']
+    tier_order = ['Raw Table', 'Guessed (Iter 1)', 'Guessed (Iter 2)', 'Guessed (Iter 3)', 'Guessed (threshold)', 'Iter 1', 'Iter 2', 'Iter 3', 'Iter 3 (inferred)', 'N/A']
     for tier in tier_order:
         if tier not in prov_tiers:
             continue
@@ -3281,33 +3354,32 @@ if results:
     fig, (ax_prov, ax_llm) = plt.subplots(1, 2, figsize=(18, 5))
 
     # ── Panel 1: Provenance Tier (stacked horizontal bars) ──
-    tier_labels, tier_pass, tier_fail = [], [], []
-    for tier in tier_order:
-        if tier not in prov_tiers:
-            continue
-        tests = prov_tiers[tier]
+    # ── Panel 1: Per-Domain Group PASS/FAIL ──
+    group_order = ['A','B','C','D','E','F','H','G','P']
+    grp_name_map = {'A':'Logistics (A)','B':'Demand (B)','C':'Inventory (C)','D':'Supplier (D)',
+                     'E':'Cross-Domain (E)','F':'Indirect (F)','H':'Hard (H)','G':'Fiscal (G)','P':'Critical (P)'}
+    grp_pass, grp_fail, grp_labels = [], [], []
+    for g in group_order:
+        tests = [r for r in results if r['id'].startswith(g)]
+        if not tests: continue
         p = sum(1 for t in tests if t['verdict'] == 'PASS')
-        f = sum(1 for t in tests if t['verdict'] == 'FAIL')
-        # Shorten label for chart
-        short = tier
-        tier_labels.append(short)
-        tier_pass.append(p)
-        tier_fail.append(f)
-
-    y_pos = range(len(tier_labels))
-    bars_pass = ax_prov.barh(y_pos, tier_pass, color='#2e7d32', edgecolor='white', label='PASS')
-    bars_fail = ax_prov.barh(y_pos, tier_fail, left=tier_pass, color='#d32f2f', edgecolor='white', label='FAIL')
+        f = len(tests) - p
+        grp_labels.append(grp_name_map.get(g, g))
+        grp_pass.append(p)
+        grp_fail.append(f)
+    y_pos = range(len(grp_labels))
+    ax_prov.barh(y_pos, grp_pass, color='#2e7d32', edgecolor='white', label='PASS')
+    ax_prov.barh(y_pos, grp_fail, left=grp_pass, color='#d32f2f', edgecolor='white', label='FAIL')
     ax_prov.set_yticks(y_pos)
-    ax_prov.set_yticklabels(tier_labels, fontsize=10)
+    ax_prov.set_yticklabels(grp_labels, fontsize=10)
     ax_prov.set_xlabel('Test Count')
-    ax_prov.set_title(f'Provenance: Which UC Tier Produced the Answer? ({current_stage})', fontsize=11, fontweight='bold')
+    ax_prov.set_title(f'PASS/FAIL by Domain Group ({current_stage})', fontsize=11, fontweight='bold')
     ax_prov.legend(loc='lower right', fontsize=9)
     ax_prov.invert_yaxis()
-    # Annotate counts
-    for i, (p, f) in enumerate(zip(tier_pass, tier_fail)):
-        total_t = p + f
-        ax_prov.text(total_t + 0.3, i, f'{total_t} ({p}P/{f}F)', va='center', fontsize=9, fontweight='bold')
-    ax_prov.set_xlim(0, max(p + f for p, f in zip(tier_pass, tier_fail)) + 8)
+    for i, (p, f) in enumerate(zip(grp_pass, grp_fail)):
+        total = p + f
+        ax_prov.text(total+0.3, i, f'{total} ({p}P/{f}F)', va='center', fontsize=9, fontweight='bold')
+    ax_prov.set_xlim(0, max(p+f for p, f in zip(grp_pass, grp_fail)) + 6)
 
     # ── Panel 2: LLM Reasoning Distribution (horizontal bars, color by reliability) ──
     cat_labels, cat_pass, cat_fail = [], [], []
@@ -3377,6 +3449,7 @@ if 'assumptions' in dir():
 # MAGIC | D04, D06, H01, H02 | Agent uses `supplier_lead_times` (pre-aggregated monthly) instead of `supplier_orders` (per-order granularity) for lead time variance | Column comment on `supplier_orders.lead_time_variance_days` + warning on `supplier_lead_times` table + Example SQL queries |
 # MAGIC | F02 | Agent interprets "% vendors late" as per-distinct-vendor (83.33%) instead of per-order (75%) | Column comment on `supplier_orders.is_late` + Example SQL query with per-order formula |
 # MAGIC | F03, H03 | Agent counts `Partially_Fulfilled` as fulfilled | Column comment on `sales_orders.order_status` defining each status value precisely + Example SQL queries |
+# MAGIC | A02, A03 | Agent intermittently uses `actual_delivery_date` or `CURRENT_DATE()` instead of `ship_date` | Column comments on `ship_date` (primary), `actual_delivery_date` (warning), `destination_region` (exact values) + strengthened Example SQL usage guidance |
 # MAGIC | A04 | Agent uses 2024 instead of 2026 for "August" | Temporal context from certified patterns + instruction emphasis |
 # MAGIC
 # MAGIC ### Column Comments Added
@@ -3386,6 +3459,9 @@ if 'assumptions' in dir():
 # MAGIC * **`sales_orders.order_status`** — Defines exact values: `Fulfilled` (100% shipped, only this counts), `Partially_Fulfilled` (NOT fulfilled), `Backordered`, `Cancelled`
 # MAGIC * **`supplier_orders.is_late`** — "Vendor late % = COUNT(is_late=true) / COUNT(*) computed per ORDER, not per vendor"
 # MAGIC * **`sales_orders.total_amount`** — "This is the revenue column — SUM(total_amount) gives total revenue"
+# MAGIC * **`shipments.ship_date`** — "PRIMARY date column for ALL monthly analyses. ALWAYS use ship_date, NEVER actual_delivery_date or CURRENT_DATE()"
+# MAGIC * **`shipments.actual_delivery_date`** — "WARNING: Do NOT use for monthly analysis. Use ship_date instead"
+# MAGIC * **`shipments.destination_region`** — "Valid values: Western, Eastern, Central, Southern. Use exact match, not ILIKE"
 # MAGIC
 # MAGIC ### Example SQL Queries (via Genie API → Examples tab)
 # MAGIC
@@ -3452,6 +3528,19 @@ comment_sqls = [
     f"""ALTER TABLE {CAT}.demand_analysis.sales_orders
     ALTER COLUMN total_amount
     COMMENT 'Total order value in USD. This is the revenue column \u2014 SUM(total_amount) gives total revenue.'""",
+
+    # Fix A02/A03: Steer agent to use ship_date (not actual_delivery_date or CURRENT_DATE())
+    f"""ALTER TABLE {CAT}.logistics_operations.shipments
+    ALTER COLUMN ship_date
+    COMMENT 'Date the shipment was dispatched. CRITICAL: This is the PRIMARY date column for ALL monthly shipment analyses (delivery rates, delay days, shipment counts, on-time rates). ALWAYS use ship_date for date range filters (e.g. ship_date >= DATE 2026-08-01 AND ship_date < DATE 2026-09-01). NEVER use actual_delivery_date for monthly filtering. NEVER use CURRENT_DATE() \u2014 always use explicit date literals.'""",
+
+    f"""ALTER TABLE {CAT}.logistics_operations.shipments
+    ALTER COLUMN actual_delivery_date
+    COMMENT 'Date the shipment actually arrived at destination. WARNING: Do NOT use this column for monthly shipment analysis or rate calculations. Use ship_date instead for all date range filtering.'""",
+
+    f"""ALTER TABLE {CAT}.logistics_operations.shipments
+    ALTER COLUMN destination_region
+    COMMENT 'Destination region of the shipment. Valid values: Western, Eastern, Central, Southern. ALWAYS use destination_region (not origin_region) when filtering by delivery region. Use exact match (destination_region = Western), not ILIKE patterns.'""",
 ]
 
 for sql in comment_sqls:
@@ -3530,13 +3619,13 @@ example_sqls = {
             "id": uuid.uuid4().hex,
             "question": ["What is the delayed shipment rate for Western region shipments last month?", "What percentage of Western region shipments were delayed last month?", "What is the late delivery rate for Western region shipments last month?"],
             "sql": [f"SELECT ROUND(AVG(CASE WHEN is_late = true THEN 1.0 ELSE 0.0 END) * 100, 2) as late_delivery_rate FROM {CAT}.logistics_operations.shipments WHERE destination_region = 'Western' AND ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'"],
-            "usage_guidance": ["ALWAYS filter by ship_date (not actual_delivery_date) for monthly shipment counts and rates. Use destination_region for region filtering. Treat delayed shipment as the same concept as is_late = true."]
+            "usage_guidance": ["ALWAYS filter by ship_date (not actual_delivery_date) for monthly shipment counts and rates. Use destination_region (not origin_region) for region filtering. Treat delayed shipment as the same concept as is_late = true. NEVER use CURRENT_DATE() \u2014 always use explicit date literals like DATE '2026-08-01'. NEVER use ILIKE patterns for region \u2014 use exact match (destination_region = 'Western')."]
         },
         {
             "id": uuid.uuid4().hex,
             "question": ["What is the average delay in days for delayed shipments in the Western region last month?", "What is the average delay days for delayed deliveries in the West region?", "What is the average delay days for late deliveries in the West region?"],
             "sql": [f"SELECT ROUND(AVG(CASE WHEN is_late THEN delay_days END), 2) as avg_delay_days FROM {CAT}.logistics_operations.shipments WHERE destination_region = 'Western' AND ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'"],
-            "usage_guidance": ["Average delay for delayed shipments = AVG(delay_days) for late/delayed shipments only (CASE WHEN is_late THEN delay_days END). Do NOT add a separate delay_days IS NOT NULL filter. Filter by ship_date, not actual_delivery_date."]
+            "usage_guidance": ["Average delay for delayed/late shipments = AVG(delay_days) for late/delayed shipments only (CASE WHEN is_late THEN delay_days END). Do NOT add a separate delay_days IS NOT NULL filter \u2014 the CASE WHEN handles NULLs automatically. ALWAYS filter by ship_date (NEVER actual_delivery_date). NEVER use CURRENT_DATE() \u2014 use explicit date literals."]
         },
         {
             "id": uuid.uuid4().hex,
@@ -3661,9 +3750,9 @@ results = all_stage_results.get(current_stage, [])
 if results:
     ran_stages = set(all_stage_results.keys())
     iter_actually_ran = {
-        'Iter 1': any('iter 1' in s.lower() or 'iter1' in s.lower() for s in ran_stages),
-        'Iter 2': any('iter 2' in s.lower() or 'iter2' in s.lower() for s in ran_stages),
-        'Iter 3': any('iter 3' in s.lower() or 'iter3' in s.lower() for s in ran_stages),
+        'Iter 1': any('iteration 1' in s.lower() or 'iter 1' in s.lower() or 'iter1' in s.lower() for s in ran_stages),
+        'Iter 2': any('iteration 2' in s.lower() or 'iter 2' in s.lower() or 'iter2' in s.lower() for s in ran_stages),
+        'Iter 3': any('iteration 3' in s.lower() or 'iter 3' in s.lower() or 'iter3' in s.lower() for s in ran_stages),
     }
     def relabel_tier(raw_tier):
         if raw_tier == 'GUESSED':
@@ -3672,7 +3761,7 @@ if results:
             return f'Guessed ({raw_tier})'
         return raw_tier
     def _confidence_from_tier(tier):
-        if tier in ('Iter 2', 'Iter 3'): return 'DETERMINISTIC'
+        if tier in ('Iter 2', 'Iter 3') or tier.startswith('Iter 3'): return 'DETERMINISTIC'
         if tier == 'Iter 1': return 'HEURISTIC'
         if tier.startswith('Guessed'): return 'GUESSED'
         if tier == 'N/A': return 'N/A'
@@ -3709,8 +3798,8 @@ if results:
     print(f"\n{'='*90}")
     print(f"  PROVENANCE SUMMARY BY TIER")
     print(f"{'='*90}")
-    tier_order = ['Baseline', 'Guessed (Iter 1)', 'Guessed (Iter 2)', 'Guessed (Iter 3)',
-                  'Guessed (threshold)', 'Iter 1', 'Iter 2', 'Iter 3', 'N/A']
+    tier_order = ['Raw Table', 'Guessed (Iter 1)', 'Guessed (Iter 2)', 'Guessed (Iter 3)',
+                  'Guessed (threshold)', 'Iter 1', 'Iter 2', 'Iter 3', 'Iter 3 (inferred)', 'N/A']
     for tier in tier_order:
         if tier not in prov_tiers: continue
         tests = prov_tiers[tier]
@@ -3739,27 +3828,32 @@ if results:
     from matplotlib.patches import Patch
     fig, (ax_prov, ax_llm) = plt.subplots(1, 2, figsize=(18, 5))
 
-    tier_labels, tier_pass, tier_fail = [], [], []
-    for tier in tier_order:
-        if tier not in prov_tiers: continue
-        tests = prov_tiers[tier]
+    # ── Panel 1: Per-Domain Group PASS/FAIL ──
+    group_order = ['A','B','C','D','E','F','H','G','P']
+    grp_name_map = {'A':'Logistics (A)','B':'Demand (B)','C':'Inventory (C)','D':'Supplier (D)',
+                     'E':'Cross-Domain (E)','F':'Indirect (F)','H':'Hard (H)','G':'Fiscal (G)','P':'Critical (P)'}
+    grp_pass, grp_fail, grp_labels = [], [], []
+    for g in group_order:
+        tests = [r for r in results if r['id'].startswith(g)]
+        if not tests: continue
         p = sum(1 for t in tests if t['verdict'] == 'PASS')
-        f = sum(1 for t in tests if t['verdict'] == 'FAIL')
-        tier_labels.append(tier)
-        tier_pass.append(p)
-        tier_fail.append(f)
-    y_pos = range(len(tier_labels))
-    ax_prov.barh(y_pos, tier_pass, color='#2e7d32', edgecolor='white', label='PASS')
-    ax_prov.barh(y_pos, tier_fail, left=tier_pass, color='#d32f2f', edgecolor='white', label='FAIL')
+        f = len(tests) - p
+        grp_labels.append(grp_name_map.get(g, g))
+        grp_pass.append(p)
+        grp_fail.append(f)
+    y_pos = range(len(grp_labels))
+    ax_prov.barh(y_pos, grp_pass, color='#2e7d32', edgecolor='white', label='PASS')
+    ax_prov.barh(y_pos, grp_fail, left=grp_pass, color='#d32f2f', edgecolor='white', label='FAIL')
     ax_prov.set_yticks(y_pos)
-    ax_prov.set_yticklabels(tier_labels, fontsize=10)
+    ax_prov.set_yticklabels(grp_labels, fontsize=10)
     ax_prov.set_xlabel('Test Count')
-    ax_prov.set_title(f'Provenance: Which UC Tier? ({current_stage})', fontsize=11, fontweight='bold')
+    ax_prov.set_title(f'PASS/FAIL by Domain Group ({current_stage})', fontsize=11, fontweight='bold')
     ax_prov.legend(loc='lower right', fontsize=9)
     ax_prov.invert_yaxis()
-    for i, (p, f) in enumerate(zip(tier_pass, tier_fail)):
-        ax_prov.text(p+f+0.3, i, f'{p+f} ({p}P/{f}F)', va='center', fontsize=9, fontweight='bold')
-    ax_prov.set_xlim(0, max(p+f for p, f in zip(tier_pass, tier_fail)) + 8)
+    for i, (p, f) in enumerate(zip(grp_pass, grp_fail)):
+        total = p + f
+        ax_prov.text(total+0.3, i, f'{total} ({p}P/{f}F)', va='center', fontsize=9, fontweight='bold')
+    ax_prov.set_xlim(0, max(p+f for p, f in zip(grp_pass, grp_fail)) + 6)
 
     cat_labels, cat_pass, cat_fail = [], [], []
     cat_colors = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','INFERRED':'#f9a825',
@@ -4213,9 +4307,9 @@ results = all_stage_results.get(current_stage, [])
 if results:
     ran_stages = set(all_stage_results.keys())
     iter_actually_ran = {
-        'Iter 1': any('iter 1' in s.lower() or 'iter1' in s.lower() for s in ran_stages),
-        'Iter 2': any('iter 2' in s.lower() or 'iter2' in s.lower() for s in ran_stages),
-        'Iter 3': any('iter 3' in s.lower() or 'iter3' in s.lower() for s in ran_stages),
+        'Iter 1': any('iteration 1' in s.lower() or 'iter 1' in s.lower() or 'iter1' in s.lower() for s in ran_stages),
+        'Iter 2': any('iteration 2' in s.lower() or 'iter 2' in s.lower() or 'iter2' in s.lower() for s in ran_stages),
+        'Iter 3': any('iteration 3' in s.lower() or 'iter 3' in s.lower() or 'iter3' in s.lower() for s in ran_stages),
     }
     def relabel_tier(raw_tier):
         if raw_tier == 'GUESSED':
@@ -4224,7 +4318,7 @@ if results:
             return f'Guessed ({raw_tier})'
         return raw_tier
     def _confidence_from_tier(tier):
-        if tier in ('Iter 2', 'Iter 3'): return 'DETERMINISTIC'
+        if tier in ('Iter 2', 'Iter 3') or tier.startswith('Iter 3'): return 'DETERMINISTIC'
         if tier == 'Iter 1': return 'HEURISTIC'
         if tier.startswith('Guessed'): return 'GUESSED'
         if tier == 'N/A': return 'N/A'
@@ -4261,8 +4355,8 @@ if results:
     print(f"\n{'='*90}")
     print(f"  PROVENANCE SUMMARY BY TIER")
     print(f"{'='*90}")
-    tier_order = ['Baseline', 'Guessed (Iter 1)', 'Guessed (Iter 2)', 'Guessed (Iter 3)',
-                  'Guessed (threshold)', 'Iter 1', 'Iter 2', 'Iter 3', 'N/A']
+    tier_order = ['Raw Table', 'Guessed (Iter 1)', 'Guessed (Iter 2)', 'Guessed (Iter 3)',
+                  'Guessed (threshold)', 'Iter 1', 'Iter 2', 'Iter 3', 'Iter 3 (inferred)', 'N/A']
     for tier in tier_order:
         if tier not in prov_tiers: continue
         tests = prov_tiers[tier]
@@ -4290,27 +4384,32 @@ if results:
     from matplotlib.patches import Patch
     fig, (ax_prov, ax_llm) = plt.subplots(1, 2, figsize=(18, 5))
 
-    tier_labels, tier_pass, tier_fail = [], [], []
-    for tier in tier_order:
-        if tier not in prov_tiers: continue
-        tests = prov_tiers[tier]
+    # ── Panel 1: Per-Domain Group PASS/FAIL ──
+    group_order = ['A','B','C','D','E','F','H','G','P']
+    grp_name_map = {'A':'Logistics (A)','B':'Demand (B)','C':'Inventory (C)','D':'Supplier (D)',
+                     'E':'Cross-Domain (E)','F':'Indirect (F)','H':'Hard (H)','G':'Fiscal (G)','P':'Critical (P)'}
+    grp_pass, grp_fail, grp_labels = [], [], []
+    for g in group_order:
+        tests = [r for r in results if r['id'].startswith(g)]
+        if not tests: continue
         p = sum(1 for t in tests if t['verdict'] == 'PASS')
-        f = sum(1 for t in tests if t['verdict'] == 'FAIL')
-        tier_labels.append(tier)
-        tier_pass.append(p)
-        tier_fail.append(f)
-    y_pos = range(len(tier_labels))
-    ax_prov.barh(y_pos, tier_pass, color='#2e7d32', edgecolor='white', label='PASS')
-    ax_prov.barh(y_pos, tier_fail, left=tier_pass, color='#d32f2f', edgecolor='white', label='FAIL')
+        f = len(tests) - p
+        grp_labels.append(grp_name_map.get(g, g))
+        grp_pass.append(p)
+        grp_fail.append(f)
+    y_pos = range(len(grp_labels))
+    ax_prov.barh(y_pos, grp_pass, color='#2e7d32', edgecolor='white', label='PASS')
+    ax_prov.barh(y_pos, grp_fail, left=grp_pass, color='#d32f2f', edgecolor='white', label='FAIL')
     ax_prov.set_yticks(y_pos)
-    ax_prov.set_yticklabels(tier_labels, fontsize=10)
+    ax_prov.set_yticklabels(grp_labels, fontsize=10)
     ax_prov.set_xlabel('Test Count')
-    ax_prov.set_title(f'Provenance: Which UC Tier? ({current_stage})', fontsize=11, fontweight='bold')
+    ax_prov.set_title(f'PASS/FAIL by Domain Group ({current_stage})', fontsize=11, fontweight='bold')
     ax_prov.legend(loc='lower right', fontsize=9)
     ax_prov.invert_yaxis()
-    for i, (p, f) in enumerate(zip(tier_pass, tier_fail)):
-        ax_prov.text(p+f+0.3, i, f'{p+f} ({p}P/{f}F)', va='center', fontsize=9, fontweight='bold')
-    ax_prov.set_xlim(0, max(p+f for p, f in zip(tier_pass, tier_fail)) + 8)
+    for i, (p, f) in enumerate(zip(grp_pass, grp_fail)):
+        total = p + f
+        ax_prov.text(total+0.3, i, f'{total} ({p}P/{f}F)', va='center', fontsize=9, fontweight='bold')
+    ax_prov.set_xlim(0, max(p+f for p, f in zip(grp_pass, grp_fail)) + 6)
 
     cat_labels, cat_pass, cat_fail = [], [], []
     cat_colors = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','INFERRED':'#f9a825',
@@ -4457,13 +4556,13 @@ display(spark.sql(f"SELECT * FROM {CAT}.reporting.fiscal_targets ORDER BY fiscal
 # Re-establishes: spaces, ask_genie, extract_from_msg,
 # find_value_in_text, FAILING_TESTS, test_failing_metrics,
 # assumptions, without re-running the 30-min baseline.
-# Safe to skip if the kernel is warm (cell 6 already ran).
+# Safe to skip if the kernel is warm (cell 7 already ran).
 # ============================================================
 
 # ── WARM-KERNEL GUARD ─────────────────────────────────────────────────────
-# If cell 6 already ran, this cell would DOWNGRADE ask_genie
+# If cell 7 already ran, this cell would DOWNGRADE ask_genie
 # (to old start-conversation API) and overwrite the assumptions list.
-# The guard preserves cell 6's state when the kernel is warm.
+# The guard preserves cell 7's state when the kernel is warm.
 _KERNEL_WARM = (
     'assumptions' in dir() and len(assumptions) >= 45
     and 'spaces' in dir() and isinstance(spaces, dict) and len(spaces) >= 5
@@ -4471,10 +4570,10 @@ _KERNEL_WARM = (
     and 'detect_provenance' in dir()
 )
 if _KERNEL_WARM:
-    print("  \u23ed KERNEL IS WARM — skipping recovery (cell 6 already loaded 45 tests + all functions)")
+    print("  \u23ed KERNEL IS WARM — skipping recovery (cell 7 already loaded 45 tests + all functions)")
     print(f"    assumptions: {len(assumptions)} tests | spaces: {list(spaces.keys())}")
     print(f"    Functions: ask_genie, detect_provenance, test_all_metrics — all present")
-# Save cell 6's ask_genie (uses Agent Mode API) before recovery might overwrite it
+# Save cell 7's ask_genie (uses Agent Mode API) before recovery might overwrite it
 _saved_ask_genie = ask_genie if 'ask_genie' in dir() and _KERNEL_WARM else None
 
 import time, requests, json, re
@@ -4497,7 +4596,7 @@ if 'spaces' not in dir() or not spaces or len(spaces) < 5:
 else:
     print("  spaces already in kernel — skipping discovery")
 
-# --- Re-define core functions (same as cell 6) ---
+# --- Re-define core functions (same as cell 7) ---
 def ask_genie(space_id, question, timeout_secs=120):
     conv = requests.post(f"{host}/api/2.0/genie/spaces/{space_id}/start-conversation",
                          headers=headers, json={"content": question})
@@ -4539,12 +4638,12 @@ def find_value_in_text(text, expected):
         if diff < best_diff: best_diff, closest = diff, num
     return False, None, closest
 
-# Restore cell 6's ask_genie if kernel was warm (don't downgrade to old API)
+# Restore cell 7's ask_genie if kernel was warm (don't downgrade to old API)
 if _saved_ask_genie is not None:
     ask_genie = _saved_ask_genie
-    print("  \u2705 Restored cell 6's ask_genie (Agent Mode API — not overwritten by recovery)")
+    print("  \u2705 Restored cell 7's ask_genie (Agent Mode API — not overwritten by recovery)")
 
-# --- Full assumptions list (45 tests — same as cell 6) ---
+# --- Full assumptions list (45 tests — same as cell 7) ---
 # GUARD: Only overwrite if kernel is cold
 _recovery_assumptions = [
     ("A01","logistics","What is the on-time delivery rate for Western region shipments in August 2026?",5.43,"MV: on_time_delivery_rate","Metric View (Iter 2)"),
@@ -4585,13 +4684,13 @@ _recovery_assumptions = [
     ("H05","executive","What is the total revenue at risk from supply chain disruptions in Western region including cancelled revenue, backordered revenue, and wasted freight combined?",3138569.66,"Cross-domain: demand + logistics (no single agent has both)","CoD View (Iter 2)"),
     ("H06","inventory","What is the average revenue at risk per stockout SKU in Western region?",14368.63,"Cross-domain: inventory stockouts + demand revenue","Metric View (Iter 2)"),
     ("H07","executive","What is our total cost of supply chain disruptions as a ratio of Western region revenue?",1.12,"Cross-domain: CoD / revenue ratio","CoD View (Iter 2)"),
-    ("G01","executive","Are we going to miss our Q3 service-level targets?",95.0,"Q3 target (in fiscal_targets table, Q3=Jan-Mar fiscal)","fiscal_targets Table (Iter 3)"),
-    ("G02","executive","What is our Q3 service-level target?",95.0,"Q3 target value (in fiscal_targets table)","fiscal_targets Table (Iter 3)"),
-    ("P01","logistics","How many shipments in August were flagged under the Logistics Risk Standards?",176,"Multi-condition: delay>=5 AND weight>800","SQL Function (Iter 3)"),
-    ("P02","demand","How many Western region orders in August triggered a Demand Anomaly Alert?",77,"Multi-condition: qty>=8 AND price<30 AND Online","SQL Function (Iter 3)"),
-    ("P03","inventory","How many inventory positions are classified as supply-risk under Inventory Standards?",106,"Multi-condition: dos 1-11 AND below_ss AND on_hand>0","SQL Function (Iter 3)"),
-    ("P04","supplier","How many supplier orders last month fell below the Procurement Quality Minimum?",11,"Multi-condition: quality<75 AND ltv>12","SQL Function (Iter 3)"),
-    ("P05","executive","How many suppliers exceeded the Executive Disruption Threshold?",3,"Multi-condition: risk<55 AND ltv>8 AND penalty>80K","SQL Function (Iter 3)"),
+    ("G01","executive","Are we going to miss our Q3 service-level targets?",95.0,"Q3 target (in fiscal_targets table, Q3=Jan-Mar fiscal)","Reference Table (Iter 3)"),
+    ("G02","executive","What is our Q3 service-level target?",95.0,"Q3 target value (in fiscal_targets table)","Reference Table (Iter 3)"),
+    ("P01","logistics","How many shipments in August were flagged under the Logistics Risk Standards?",176,"Multi-condition: delay>=5 AND weight>800","UC Pages / SQL Function (Iter 3)"),
+    ("P02","demand","How many Western region orders in August triggered a Demand Anomaly Alert?",77,"Multi-condition: qty>=8 AND price<30 AND Online","UC Pages / SQL Function (Iter 3)"),
+    ("P03","inventory","How many inventory positions are classified as supply-risk under Inventory Standards?",106,"Multi-condition: dos 1-11 AND below_ss AND on_hand>0","UC Pages / SQL Function (Iter 3)"),
+    ("P04","supplier","How many supplier orders last month fell below the Procurement Quality Minimum?",11,"Multi-condition: quality<75 AND ltv>12","UC Pages / SQL Function (Iter 3)"),
+    ("P05","executive","How many suppliers exceeded the Executive Disruption Threshold?",3,"Multi-condition: risk<55 AND ltv>8 AND penalty>80K","UC Pages / SQL Function (Iter 3)"),
 ]
 
 # --- FAILING_TESTS from known baseline results ---
@@ -4606,7 +4705,7 @@ else:
     print(f"  \u23ed assumptions preserved ({len(assumptions)} tests) — not overwritten")
     print(f"  \u23ed FAILING_TESTS preserved ({len(FAILING_TESTS)} tests) — not overwritten")
 
-# --- test_failing_metrics (same as cell 6 — with GT SQL + provenance + 4 return values) ---
+# --- test_failing_metrics (same as cell 7 — with GT SQL + provenance + 4 return values) ---
 def test_failing_metrics(label=""):
     """Run targeted test on previously-failing metrics.
     Shows full agent response (SQL, narration, result rows) for transparency.
@@ -4633,16 +4732,14 @@ def test_failing_metrics(label=""):
         print_boxed_block("GROUND TRUTH SQL", gt_sql or gt_note)
         if narration:
             print(f"  \u250c\u2500 NARRATION \u2500\u2500\u2500")
-            for line in narration.split("\n")[:5]:
+            for line in narration.split("\n"):
                 print(f"  \u2502 {line}")
-            if len(narration.split("\n")) > 5:
-                print(f"  \u2502 ...")
             print(f"  \u2514{'\u2500'*70}")
         if rows:
             print(f"  \u250c\u2500 RESULT ({len(rows)} rows) \u2500\u2500\u2500")
-            for i, row in enumerate(rows[:3]):
+            for i, row in enumerate(rows[:10]):
                 print(f"  \u2502 [{i}] {row}")
-            if len(rows) > 3:
+            if len(rows) > 10:
                 print(f"  \u2502 ... ({len(rows)} total)")
             print(f"  \u2514{'\u2500'*70}")
         all_text = (narration or "") + " " + (sql or "")
@@ -4744,25 +4841,53 @@ def detect_provenance(sql, aid):
             return ('Iter 3', 'Reference Table: fiscal_targets',
                     'Agent found 95% target in fiscal_targets table (not from UC Page)')
     # --- Iter 3: SQL Functions — domain-specific policy thresholds ---
+    # --- Iter 3: SQL Functions — definition-only (agent reads definition, writes own SQL) ---
     sql_func_map = {
-        'P01': ('get_critical_delay_shipments', 'total_weight_kg', ['>= 5', '>=5', '> 800', '>800'], 5),
-        'P02': ('get_critical_accuracy_forecasts', 'unit_price', ['>= 8', '>=8', '< 30', '<30'], 8),
-        'P03': ('get_critical_supply_positions', 'on_hand_qty', ['between 1 and 11', '< 12', '<12'], 11),
-        'P04': ('get_critical_quality_orders', 'lead_time_variance', ['< 75', '<75', '> 12', '>12'], 75),
-        'P05': ('get_critical_disruption_regions', 'composite_risk_score', ['< 55', '<55', '> 80000', '>80000'], 55),
+        'P01': ('get_critical_delay_shipments', [
+            ['delay_days'], ['total_weight_kg'],
+            ['>= 5', '>=5'], ['> 800', '>800'],
+        ]),
+        'P02': ('get_critical_accuracy_forecasts', [
+            ['quantity'], ['unit_price'], ['channel'],
+            ['>= 8', '>=8'], ['< 30', '<30'],
+        ]),
+        'P03': ('get_critical_supply_positions', [
+            ['days_of_supply'], ['below_safety_stock'],
+            ['on_hand_qty', 'on_hand'],
+            ['between 1 and 11'],
+        ]),
+        'P04': ('get_critical_quality_orders', [
+            ['quality_score'], ['lead_time_variance'],
+            ['< 75', '<75'], ['> 12', '>12'],
+        ]),
+        'P05': ('get_critical_disruption_regions', [
+            ['composite_risk_score'], ['lead_time_variance'],
+            ['total_penalty_usd'],
+            ['< 55', '<55'], ['> 80000', '>80000'],
+        ]),
     }
     if aid in sql_func_map:
-        func_name, key_col, markers, _ = sql_func_map[aid]
+        func_name, condition_groups = sql_func_map[aid]
         if func_name in sql_lower:
             return ('Iter 3', f'SQL Function: {func_name}()',
                     f'Agent called the SQL function directly')
-        if key_col in sql_lower and any(m in sql_lower for m in markers):
-            return ('Iter 3', f'SQL Function guidance: {func_name}',
-                    f'Agent used the multi-condition rule from the function definition')
-        return ('GUESSED', f'Guessed policy threshold for {aid}',
-                f'Agent guessed — did NOT use SQL function {func_name}()')
+        groups_matched = sum(
+            1 for group in condition_groups
+            if any(marker in sql_lower for marker in group)
+        )
+        total_groups = len(condition_groups)
+        if groups_matched == total_groups:
+            return ('Iter 3 (inferred)', f'SQL Function (inferred): all {total_groups} conditions match {func_name}',
+                    f'Agent SQL matches ALL {total_groups} conditions from {func_name}() definition. '
+                    f'API does not expose internal reasoning, but full multi-condition match '
+                    f'is strong evidence the agent consulted the function.')
+        elif groups_matched > 0:
+            return ('GUESSED', f'Partial match ({groups_matched}/{total_groups} conditions vs {func_name})',
+                    f'Only {groups_matched} of {total_groups} condition groups match.')
+        return ('GUESSED', f'No condition match for {aid} vs {func_name}',
+                f'Agent did not use any conditions from {func_name}() definition.')
     # --- Baseline: Raw table query ---
-    return ('Baseline', 'Direct query (no UC feature needed)',
+    return ('Raw Table', 'Direct query (no UC feature needed)',
             'Agent answered correctly from raw tables alone — no UC semantic feature required')
 
 # Global: stores per-iteration test details for flip tracking
@@ -5241,64 +5366,56 @@ print("    Fixes: P05 (Exec Disruption = risk < 55 AND ltv > 8 AND penalty > 80K
 print("\n  Step 4: Creating SQL threshold functions for P01-P05...")
 
 threshold_functions = [
-    # P01: Logistics critical delay
+    # P01: Logistics critical delay — definition only, agent must query shipments table itself
     (f"{CAT}.logistics_operations", "get_critical_delay_shipments", f"""CREATE OR REPLACE FUNCTION {CAT}.logistics_operations.get_critical_delay_shipments()
-RETURNS TABLE (concept STRING, threshold_column STRING, operator STRING, threshold_value DOUBLE, definition STRING, result_count BIGINT)
+RETURNS TABLE (concept STRING, source_table STRING, threshold_columns STRING, conditions STRING, definition STRING)
 RETURN
   SELECT
-    'critical_delay' AS concept,
-    'delay_days, total_weight_kg' AS threshold_column,
-    '>= 5, > 800' AS operator,
-    5.0 AS threshold_value,
-    'A shipment is flagged under Logistics Risk Standards when delay_days >= 5 AND total_weight_kg > 800. Source: UC Page Logistics Risk Standards.' AS definition,
-    (SELECT COUNT(*) FROM {CAT}.logistics_operations.shipments
-     WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01' AND delay_days >= 5 AND total_weight_kg > 800) AS result_count"""),
-    # P03: Inventory critical supply
+    'Logistics Risk Standards' AS concept,
+    '{CAT}.logistics_operations.shipments' AS source_table,
+    'delay_days, total_weight_kg' AS threshold_columns,
+    'delay_days >= 5 AND total_weight_kg > 800' AS conditions,
+    'A shipment is flagged under Logistics Risk Standards when delay_days >= 5 AND total_weight_kg > 800. Query the shipments table with ship_date for the relevant time period and apply these conditions. Source: UC Page Logistics Risk Standards.' AS definition"""),
+    # P03: Inventory critical supply — definition only, agent must query inventory_ledger itself
     (f"{CAT}.inventory_management", "get_critical_supply_positions", f"""CREATE OR REPLACE FUNCTION {CAT}.inventory_management.get_critical_supply_positions()
-RETURNS TABLE (concept STRING, threshold_column STRING, operator STRING, threshold_value DOUBLE, definition STRING, result_count BIGINT)
+RETURNS TABLE (concept STRING, source_table STRING, threshold_columns STRING, conditions STRING, definition STRING)
 RETURN
   SELECT
-    'supply_risk' AS concept,
-    'days_of_supply, below_safety_stock_flag, on_hand_qty' AS threshold_column,
-    'BETWEEN 1 AND 11, = true, > 0' AS operator,
-    11.0 AS threshold_value,
-    'An inventory position is classified as supply-risk under Inventory Standards when days_of_supply BETWEEN 1 AND 11 AND below_safety_stock_flag = true AND on_hand_qty > 0. Source: UC Page Inventory Risk Classification.' AS definition,
-    (SELECT COUNT(*) FROM {CAT}.inventory_management.inventory_ledger WHERE days_of_supply BETWEEN 1 AND 11 AND below_safety_stock_flag = true AND on_hand_qty > 0) AS result_count"""),
-    # P02: Demand critical accuracy
+    'Inventory Risk Classification' AS concept,
+    '{CAT}.inventory_management.inventory_ledger' AS source_table,
+    'days_of_supply, below_safety_stock_flag, on_hand_qty' AS threshold_columns,
+    'days_of_supply BETWEEN 1 AND 11 AND below_safety_stock_flag = true AND on_hand_qty > 0' AS conditions,
+    'An inventory position is classified as supply-risk under Inventory Standards when days_of_supply BETWEEN 1 AND 11 AND below_safety_stock_flag = true AND on_hand_qty > 0. Query the inventory_ledger table and apply these conditions. Source: UC Page Inventory Risk Classification.' AS definition"""),
+    # P02: Demand critical accuracy — definition only, agent must query sales_orders itself
     (f"{CAT}.demand_analysis", "get_critical_accuracy_forecasts", f"""CREATE OR REPLACE FUNCTION {CAT}.demand_analysis.get_critical_accuracy_forecasts()
-RETURNS TABLE (concept STRING, threshold_column STRING, operator STRING, threshold_value DOUBLE, definition STRING, result_count BIGINT)
+RETURNS TABLE (concept STRING, source_table STRING, threshold_columns STRING, conditions STRING, definition STRING)
 RETURN
   SELECT
-    'demand_anomaly' AS concept,
-    'quantity, unit_price, channel' AS threshold_column,
-    '>= 8, < 30, = Online' AS operator,
-    8.0 AS threshold_value,
-    'A Western region order triggers a Demand Anomaly Alert when quantity >= 8 AND unit_price < 30 AND channel = Online. Source: UC Page Demand Quality Standards.' AS definition,
-    (SELECT COUNT(*) FROM {CAT}.demand_analysis.sales_orders
-     WHERE order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01' AND region = 'Western' AND quantity >= 8 AND unit_price < 30 AND channel = 'Online') AS result_count"""),
-    # P04: Supplier critical quality
+    'Demand Anomaly Alert' AS concept,
+    '{CAT}.demand_analysis.sales_orders' AS source_table,
+    'quantity, unit_price, channel' AS threshold_columns,
+    'quantity >= 8 AND unit_price < 30 AND channel = ''Online''' AS conditions,
+    'A Western region order triggers a Demand Anomaly Alert when quantity >= 8 AND unit_price < 30 AND channel = Online. Query the sales_orders table with order_date for the relevant time period and region, then apply these conditions. Source: UC Page Demand Quality Standards.' AS definition"""),
+    # P04: Supplier critical quality — definition only, agent must query supplier_orders itself
     (f"{CAT}.supplier_procurement", "get_critical_quality_orders", f"""CREATE OR REPLACE FUNCTION {CAT}.supplier_procurement.get_critical_quality_orders()
-RETURNS TABLE (concept STRING, threshold_column STRING, operator STRING, threshold_value DOUBLE, definition STRING, result_count BIGINT)
+RETURNS TABLE (concept STRING, source_table STRING, threshold_columns STRING, conditions STRING, definition STRING)
 RETURN
   SELECT
-    'quality_minimum' AS concept,
-    'quality_score, lead_time_variance_days' AS threshold_column,
-    '< 75, > 12' AS operator,
-    75.0 AS threshold_value,
-    'A supplier order falls below Procurement Quality Minimum when quality_score < 75 AND lead_time_variance_days > 12. Source: UC Page Supplier Quality Standards.' AS definition,
-    (SELECT COUNT(*) FROM {CAT}.supplier_procurement.supplier_orders
-     WHERE order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01' AND quality_score < 75 AND lead_time_variance_days > 12) AS result_count"""),
-    # P05: Executive critical disruption
+    'Procurement Quality Minimum' AS concept,
+    '{CAT}.supplier_procurement.supplier_orders' AS source_table,
+    'quality_score, lead_time_variance_days' AS threshold_columns,
+    'quality_score < 75 AND lead_time_variance_days > 12' AS conditions,
+    'A supplier order falls below Procurement Quality Minimum when quality_score < 75 AND lead_time_variance_days > 12. Query the supplier_orders table with order_date for the relevant time period and apply these conditions. Source: UC Page Supplier Quality Standards.' AS definition"""),
+    # P05: Executive critical disruption — definition only, agent must query risk_scorecard itself
     (f"{CAT}.reporting", "get_critical_disruption_regions", f"""CREATE OR REPLACE FUNCTION {CAT}.reporting.get_critical_disruption_regions()
-RETURNS TABLE (concept STRING, threshold_column STRING, operator STRING, threshold_value DOUBLE, definition STRING, result_count BIGINT)
+RETURNS TABLE (concept STRING, source_table STRING, threshold_columns STRING, conditions STRING, definition STRING)
 RETURN
   SELECT
-    'executive_disruption' AS concept,
-    'composite_risk_score, lead_time_variance, total_penalty_usd' AS threshold_column,
-    '< 55, > 8, > 80000' AS operator,
-    55.0 AS threshold_value,
-    'A supplier exceeds the Executive Disruption Threshold when composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000. Source: UC Page Executive Alert Thresholds.' AS definition,
-    (SELECT COUNT(*) FROM {CAT}.reporting.supply_chain_risk_scorecard WHERE composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000) AS result_count"""),
+    'Executive Disruption Threshold' AS concept,
+    '{CAT}.reporting.supply_chain_risk_scorecard' AS source_table,
+    'composite_risk_score, lead_time_variance, total_penalty_usd' AS threshold_columns,
+    'composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000' AS conditions,
+    'A supplier exceeds the Executive Disruption Threshold when composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000. Query the supply_chain_risk_scorecard table and apply these conditions. Source: UC Page Executive Alert Thresholds.' AS definition"""),
 ]
 
 for schema, fname, sql in threshold_functions:
@@ -5395,11 +5512,152 @@ ITERATION 3 CAPABILITIES
         else:
             print("    (skip) Supervisor instructions already include Iteration 3 block")
 
+# ── Step 7: Add SQL Functions as Supervisor Agent tools ──
+# The supervisor needs direct access to these functions so it can
+# answer policy threshold questions without routing to sub-agents.
+# Tool type = 'uc_function' (proven supported by Supervisor Agent API).
+print("\n  Step 7: Adding 5 SQL threshold functions as Supervisor tools...")
+
+sql_function_tools = [
+    {"name": f"{CAT}.logistics_operations.get_critical_delay_shipments",
+     "description": "Returns the business definition of Logistics Risk Standards — which columns and conditions define a flagged shipment. Does NOT return data; agent must query the source table itself."},
+    {"name": f"{CAT}.demand_analysis.get_critical_accuracy_forecasts",
+     "description": "Returns the business definition of Demand Anomaly Alert — which columns and conditions define an anomalous order. Does NOT return data; agent must query the source table itself."},
+    {"name": f"{CAT}.inventory_management.get_critical_supply_positions",
+     "description": "Returns the business definition of Inventory Risk Classification — which columns and conditions define a supply-risk position. Does NOT return data; agent must query the source table itself."},
+    {"name": f"{CAT}.supplier_procurement.get_critical_quality_orders",
+     "description": "Returns the business definition of Procurement Quality Minimum — which columns and conditions define a below-minimum order. Does NOT return data; agent must query the source table itself."},
+    {"name": f"{CAT}.reporting.get_critical_disruption_regions",
+     "description": "Returns the business definition of Executive Disruption Threshold — which columns and conditions define an at-risk supplier. Does NOT return data; agent must query the source table itself."},
+]
+
+if supervisor:
+    # List existing tools to avoid duplicates
+    existing_tools_resp = requests.get(f"{host}/api/2.1/{supervisor_name}/tools", headers=headers)
+    existing_tool_names = set()
+    if existing_tools_resp.status_code == 200:
+        for t in existing_tools_resp.json().get("tools", []):
+            existing_tool_names.add(t.get("uc_function", {}).get("name", ""))
+    
+    added, skipped = 0, 0
+    for func in sql_function_tools:
+        if func["name"] in existing_tool_names:
+            print(f"    (skip) {func['name'].split('.')[-1]}: already registered")
+            skipped += 1
+            continue
+        # tool_id must be passed as URL query parameter (not in JSON body)
+        func_slug = func["name"].split(".")[-1].replace("_", "-")
+        add_resp = requests.post(
+            f"{host}/api/2.1/{supervisor_name}/tools",
+            headers=headers,
+            params={"tool_id": func_slug},
+            json={
+                "tool_type": "uc_function",
+                "uc_function": {"name": func["name"]},
+                "description": func["description"],
+            }
+        )
+        if add_resp.status_code == 200:
+            print(f"    \u2713 {func['name'].split('.')[-1]} (tool_id: {func_slug})")
+            added += 1
+        else:
+            print(f"    \u2717 {func['name'].split('.')[-1]}: {add_resp.status_code} {add_resp.text[:150]}")
+    print(f"    Added: {added}, Skipped: {skipped}")
+
+    # ── Step 7b: Enhance Supervisor instructions to use SQL functions ──
+    print("\n  Step 7b: Enhancing Supervisor instructions to reference SQL functions...")
+    sup_detail_resp2 = requests.get(f"{host}/api/2.1/{supervisor_name}", headers=headers)
+    current_instr2 = sup_detail_resp2.json().get("instructions", "") if sup_detail_resp2.status_code == 200 else ""
+
+    sql_func_instruction_block = """
+SQL THRESHOLD FUNCTIONS (ITERATION 3)
+You have 5 SQL threshold functions available as direct tools. Each returns the BUSINESS DEFINITION of a domain-specific policy standard — the concept name, source table, threshold columns, and conditions. They do NOT return data or counts.
+When asked about policy standards or "critical" thresholds, call the relevant function to learn the definition, then query the source table with the conditions it describes:
+- get_critical_delay_shipments: Defines what Logistics Risk Standards means
+- get_critical_accuracy_forecasts: Defines what Demand Anomaly Alert means
+- get_critical_supply_positions: Defines what Inventory Risk Classification means
+- get_critical_quality_orders: Defines what Procurement Quality Minimum means
+- get_critical_disruption_regions: Defines what Executive Disruption Threshold means
+Do NOT guess thresholds — always call the function first to learn the correct conditions.
+"""
+
+    enhanced2, changed2 = _append_once(
+        current_instr2,
+        sql_func_instruction_block,
+        "SQL THRESHOLD FUNCTIONS (ITERATION 3)"
+    )
+    if changed2:
+        patch_resp2 = requests.patch(
+            f"{host}/api/2.1/{supervisor_name}?update_mask=instructions",
+            headers=headers,
+            json={"instructions": enhanced2}
+        )
+        if patch_resp2.status_code == 200:
+            print(f"    \u2713 Supervisor instructions enhanced with SQL function guidance ({len(current_instr2)} -> {len(enhanced2)} chars)")
+        else:
+            print(f"    \u2717 PATCH failed: {patch_resp2.status_code} {patch_resp2.text[:200]}")
+    else:
+        print("    (skip) SQL function block already in supervisor instructions")
+else:
+    print("    \u2717 Supervisor not found — cannot add tools")
+
+# ── Step 7c: Enhance sub-agent instructions with provenance reporting ──
+# Genie agents may or may not honor this, but it's a lightweight addition
+# that helps the narration include what UC feature was consulted.
+print("\n  Step 7c: Adding provenance reporting instruction to sub-agents...")
+
+prov_instruction = """
+PROVENANCE: When answering, briefly note which data source informed your answer:
+- If you called a SQL function (e.g. get_critical_delay_shipments), say 'Used SQL function: [name]'
+- If you queried a metric view (e.g. delivery_performance_by_region), say 'Used metric view: [name]'
+- If column comments or examples guided your query, note which ones
+This helps track which governance features are actively used.
+"""
+
+for agent_name, agent_sid in spaces.items():
+    try:
+        r = requests.get(f"{host}/api/2.0/genie/spaces/{agent_sid}?include_serialized_space=true", headers=headers)
+        if r.status_code != 200:
+            print(f"    \u26a0 {agent_name}: read failed")
+            continue
+        ss = json.loads(r.json().get("serialized_space", "{}"))
+        instr = ss.get("instructions", {})
+        if isinstance(instr, dict):
+            text_instrs = instr.get("text_instructions", [])
+            current_text = text_instrs[0]["content"][0] if text_instrs and text_instrs[0].get("content") else ""
+        elif isinstance(instr, str):
+            current_text = instr
+        else:
+            current_text = ""
+        if "PROVENANCE:" in current_text:
+            print(f"    (skip) {agent_name}: already has provenance instruction")
+            continue
+        new_text = current_text.rstrip() + "\n" + prov_instruction.strip()
+        if isinstance(instr, dict):
+            if not instr.get("text_instructions"):
+                instr["text_instructions"] = [{"content": [new_text]}]
+            else:
+                instr["text_instructions"][0]["content"] = [new_text]
+        else:
+            ss["instructions"] = new_text
+        ensure_sorted_payload(ss)
+        pr = requests.patch(f"{host}/api/2.0/genie/spaces/{agent_sid}",
+                            headers=headers, json={"serialized_space": json.dumps(ss)})
+        if pr.status_code == 200:
+            print(f"    \u2713 {agent_name}: provenance instruction added")
+        else:
+            print(f"    \u26a0 {agent_name}: patch failed ({pr.status_code})")
+    except Exception as e:
+        print(f"    \u26a0 {agent_name}: error {e}")
+
 print("\n\u2705 Iteration 3 SETUP COMPLETE:")
 print("   \u2713 fiscal_targets table added to Executive agent (fixes G01/G02)")
 print("   \u2713 5 SQL threshold functions created in catalog")
 print("   \u2713 UC Pages on Discover page (work via Genie One, not Genie Agents)")
 print("   \u2713 Supervisor enhanced with Iteration 3 capability awareness")
+print("   \u2713 5 SQL functions registered as Supervisor tools (direct access)")
+print("   \u2713 Supervisor instructions enhanced with SQL function guidance")
+print("   \u2713 Sub-agent provenance reporting instructions added")
 print("")
 print("  \u26d4 STOP HERE \u2014 Add SQL functions to each agent via the UI before continuing.")
 print("     See the table above (Step 5) for which function goes to which agent.")
@@ -5433,6 +5691,23 @@ all_comp_results["After Iteration 3"] = comp_iter3
 
 # COMMAND ----------
 
+# DBTITLE 1,Reasoning Confidence: How to Read the Evaluator Assessment
+# MAGIC %md
+# MAGIC ## Reasoning Confidence: How to Read the Evaluator Assessment
+# MAGIC
+# MAGIC Every test result carries a **Provenance Tier** (which UC feature the agent used) and a **Reasoning Confidence** label (how repeatable the answer is). The evaluator derives the confidence label dynamically from the provenance tier — nothing is hardcoded.
+# MAGIC
+# MAGIC | Confidence | What It Means | Provenance Tiers | Repeatable? |
+# MAGIC | --- | --- | --- | --- |
+# MAGIC | **DETERMINISTIC** | The agent was **steered** to the correct answer by a governed UC asset. Even if the question is rephrased, the governed column name or function catches all phrasings. The answer **cannot drift**. | Iter 2 (Metric Views), Iter 3 (SQL Functions, Reference Tables) | Always |
+# MAGIC | **HEURISTIC** | The agent was **guided** by metadata — column comments, example SQL, or certified queries taught it the right pattern. Likely repeatable, but a sufficiently novel phrasing could bypass the guidance. | Iter 1 (Column Comments, Example SQL, Benchmarks) | Usually |
+# MAGIC | **INFERRED** | The agent **figured it out on its own** from raw column and table names — no UC feature was involved. Correct today, but the mapping is a probabilistic LLM guess. A model update, rephrase, or vocabulary change could break it. These tests pass because the agent is capable, but they are **ungoverned**. | Raw Table (no UC feature used) | Today, not guaranteed |
+# MAGIC | **GUESSED** | The agent **invented** thresholds or conditions that weren't provided by any UC feature. The answer may be right by coincidence but is unreliable. Multi-condition rules (P01-P05) are truly unguessable without the SQL function definition. | Guessed thresholds, no UC feature available | No |
+# MAGIC
+# MAGIC **Key insight**: The progression from INFERRED → DETERMINISTIC is the entire point of the UC semantic layer. Accuracy alone doesn't prove governance — a lucky guess scores the same as a governed answer. Confidence proves that the answer is **reliably correct**, not just correct today.
+
+# COMMAND ----------
+
 # DBTITLE 1,VISUAL: After Iteration 3 (Final)
 # Re-plot dashboard with latest results (including Iteration 3)
 plot_test_dashboard(all_stage_results, all_comp_results if 'all_comp_results' in dir() else None)
@@ -5444,9 +5719,9 @@ results = all_stage_results.get(current_stage, [])
 if results:
     ran_stages = set(all_stage_results.keys())
     iter_actually_ran = {
-        'Iter 1': any('iter 1' in s.lower() or 'iter1' in s.lower() for s in ran_stages),
-        'Iter 2': any('iter 2' in s.lower() or 'iter2' in s.lower() for s in ran_stages),
-        'Iter 3': any('iter 3' in s.lower() or 'iter3' in s.lower() for s in ran_stages),
+        'Iter 1': any('iteration 1' in s.lower() or 'iter 1' in s.lower() or 'iter1' in s.lower() for s in ran_stages),
+        'Iter 2': any('iteration 2' in s.lower() or 'iter 2' in s.lower() or 'iter2' in s.lower() for s in ran_stages),
+        'Iter 3': any('iteration 3' in s.lower() or 'iter 3' in s.lower() or 'iter3' in s.lower() for s in ran_stages),
     }
     def relabel_tier(raw_tier):
         if raw_tier == 'GUESSED':
@@ -5455,7 +5730,7 @@ if results:
             return f'Guessed ({raw_tier})'
         return raw_tier
     def _confidence_from_tier(tier):
-        if tier in ('Iter 2', 'Iter 3'): return 'DETERMINISTIC'
+        if tier in ('Iter 2', 'Iter 3') or tier.startswith('Iter 3'): return 'DETERMINISTIC'
         if tier == 'Iter 1': return 'HEURISTIC'
         if tier.startswith('Guessed'): return 'GUESSED'
         if tier == 'N/A': return 'N/A'
@@ -5492,8 +5767,8 @@ if results:
     print(f"\n{'='*90}")
     print(f"  PROVENANCE SUMMARY BY TIER")
     print(f"{'='*90}")
-    tier_order = ['Baseline', 'Guessed (Iter 1)', 'Guessed (Iter 2)', 'Guessed (Iter 3)',
-                  'Guessed (threshold)', 'Iter 1', 'Iter 2', 'Iter 3', 'N/A']
+    tier_order = ['Raw Table', 'Guessed (Iter 1)', 'Guessed (Iter 2)', 'Guessed (Iter 3)',
+                  'Guessed (threshold)', 'Iter 1', 'Iter 2', 'Iter 3', 'Iter 3 (inferred)', 'N/A']
     for tier in tier_order:
         if tier not in prov_tiers: continue
         tests = prov_tiers[tier]
@@ -5521,27 +5796,32 @@ if results:
     from matplotlib.patches import Patch
     fig, (ax_prov, ax_llm) = plt.subplots(1, 2, figsize=(18, 5))
 
-    tier_labels, tier_pass, tier_fail = [], [], []
-    for tier in tier_order:
-        if tier not in prov_tiers: continue
-        tests = prov_tiers[tier]
+    # ── Panel 1: Per-Domain Group PASS/FAIL ──
+    group_order = ['A','B','C','D','E','F','H','G','P']
+    grp_name_map = {'A':'Logistics (A)','B':'Demand (B)','C':'Inventory (C)','D':'Supplier (D)',
+                     'E':'Cross-Domain (E)','F':'Indirect (F)','H':'Hard (H)','G':'Fiscal (G)','P':'Critical (P)'}
+    grp_pass, grp_fail, grp_labels = [], [], []
+    for g in group_order:
+        tests = [r for r in results if r['id'].startswith(g)]
+        if not tests: continue
         p = sum(1 for t in tests if t['verdict'] == 'PASS')
-        f = sum(1 for t in tests if t['verdict'] == 'FAIL')
-        tier_labels.append(tier)
-        tier_pass.append(p)
-        tier_fail.append(f)
-    y_pos = range(len(tier_labels))
-    ax_prov.barh(y_pos, tier_pass, color='#2e7d32', edgecolor='white', label='PASS')
-    ax_prov.barh(y_pos, tier_fail, left=tier_pass, color='#d32f2f', edgecolor='white', label='FAIL')
+        f = len(tests) - p
+        grp_labels.append(grp_name_map.get(g, g))
+        grp_pass.append(p)
+        grp_fail.append(f)
+    y_pos = range(len(grp_labels))
+    ax_prov.barh(y_pos, grp_pass, color='#2e7d32', edgecolor='white', label='PASS')
+    ax_prov.barh(y_pos, grp_fail, left=grp_pass, color='#d32f2f', edgecolor='white', label='FAIL')
     ax_prov.set_yticks(y_pos)
-    ax_prov.set_yticklabels(tier_labels, fontsize=10)
+    ax_prov.set_yticklabels(grp_labels, fontsize=10)
     ax_prov.set_xlabel('Test Count')
-    ax_prov.set_title(f'Provenance: Which UC Tier? ({current_stage})', fontsize=11, fontweight='bold')
+    ax_prov.set_title(f'PASS/FAIL by Domain Group ({current_stage})', fontsize=11, fontweight='bold')
     ax_prov.legend(loc='lower right', fontsize=9)
     ax_prov.invert_yaxis()
-    for i, (p, f) in enumerate(zip(tier_pass, tier_fail)):
-        ax_prov.text(p+f+0.3, i, f'{p+f} ({p}P/{f}F)', va='center', fontsize=9, fontweight='bold')
-    ax_prov.set_xlim(0, max(p+f for p, f in zip(tier_pass, tier_fail)) + 8)
+    for i, (p, f) in enumerate(zip(grp_pass, grp_fail)):
+        total = p + f
+        ax_prov.text(total+0.3, i, f'{total} ({p}P/{f}F)', va='center', fontsize=9, fontweight='bold')
+    ax_prov.set_xlim(0, max(p+f for p, f in zip(grp_pass, grp_fail)) + 6)
 
     cat_labels, cat_pass, cat_fail = [], [], []
     cat_colors = {'DETERMINISTIC':'#1b5e20','HEURISTIC':'#689f38','INFERRED':'#f9a825',
@@ -5594,6 +5874,100 @@ if all_comp_results:
 
 # COMMAND ----------
 
+# DBTITLE 1,Deep Reliability Analysis: Key Terms
+# MAGIC %md
+# MAGIC ## Deep Reliability Analysis: Key Terms
+# MAGIC
+# MAGIC The cell below analyzes **consistency across iterations** using data already collected (zero API calls). It answers: *"Can we trust these agent-generated metrics in production?"*
+# MAGIC
+# MAGIC ### SQL Pattern Stability
+# MAGIC
+# MAGIC Compares the normalized SQL signature (table + aggregation + sorted WHERE conditions) across all 4 iterations. SQL **should change** between iterations — that’s the demo improving the agent. What matters is whether it **stabilizes**.
+# MAGIC
+# MAGIC | Category | Icon | Meaning |
+# MAGIC | --- | --- | --- |
+# MAGIC | **STABLE** | 🟢 | Same SQL across ALL iterations — agent locked from the start |
+# MAGIC | **STABILIZED** | 🔵 | SQL changed early (improvement), then locked in the last 2 iterations |
+# MAGIC | **CONVERGING** | 🟡 | Same table + aggregation approach, but WHERE clause details still differ |
+# MAGIC | **VOLATILE** | 🔴 | SQL still changing in the latest iteration — not yet locked |
+# MAGIC
+# MAGIC ### Other Sections
+# MAGIC
+# MAGIC * **Provenance Stability** — Did the agent converge from raw base tables to governed UC assets (metric views, SQL functions) over iterations? A shift from `Raw Table` → `Iter 2` → `Iter 3` is the intended progression.
+# MAGIC * **Value Reliability** — Did the returned numeric value stabilize? A test that returns 94.57 in 3 of 4 iterations is more reliable than one that returns a different number each time.
+# MAGIC * **Flip Analysis** — Which tests changed verdict (PASS↔FAIL) between iterations? Flips from FAIL→PASS are expected improvements. Flips from PASS→FAIL are regressions that need investigation.
+# MAGIC * **Reliability Matrix** — Per-confidence-tier production readiness: are DETERMINISTIC tests more reliable than INFERRED ones?
+
+# COMMAND ----------
+
+# DBTITLE 1,Robustness Test: Key Terms
+# MAGIC %md
+# MAGIC ## Robustness Test: Key Terms
+# MAGIC
+# MAGIC The cell below sends **10 hardest questions × 3 genuine rephrased variations = 30 live API calls** to test whether the agent gives consistent answers regardless of how the question is worded.
+# MAGIC
+# MAGIC ### Reliability vs Dependability
+# MAGIC
+# MAGIC | Metric | Question It Answers | How It’s Measured |
+# MAGIC | --- | --- | --- |
+# MAGIC | **Reliability** | Did the agent get the **right answer**? | % of variations that matched ground truth |
+# MAGIC | **Dependability** | Did the agent use the **same SQL approach**? | SQL signature consistency across variations |
+# MAGIC
+# MAGIC A test can be **high reliability / low dependability** — it got the right answer every time, but via different SQL each time. That’s *lucky*, not *governed*. It may break tomorrow.
+# MAGIC
+# MAGIC ### Dependability Score Levels
+# MAGIC
+# MAGIC | Score | Label | Meaning |
+# MAGIC | --- | --- | --- |
+# MAGIC | **100%** | Identical SQL | Same normalized query across all 3 variations |
+# MAGIC | **85%** | Same structure, different filters | Same table + aggregation, slightly different WHERE |
+# MAGIC | **60%** | Mixed approaches | 2 of 3 variations used the same structural approach |
+# MAGIC | **33%** | Genuinely different SQL | Each variation chose a completely different strategy |
+# MAGIC
+# MAGIC ### Functional Equivalence
+# MAGIC
+# MAGIC When the SQL differs but ALL variations still produce the correct answer, the test is marked **Functionally Equivalent** (✅). The agent took different paths to the same result — reliable today, but not locked to a single governed approach.
+# MAGIC
+# MAGIC ### Anti-Bias Design
+# MAGIC
+# MAGIC Variations use genuinely different vocabulary ("late" ↔ "delayed", "vendors" ↔ "suppliers"), date phrasings ("last month" ↔ "August 2026"), and sentence structures. No variation adds hints or removes context.
+
+# COMMAND ----------
+
+# DBTITLE 1,Comprehensive Prompt Benchmark: Key Terms
+# MAGIC %md
+# MAGIC ## Comprehensive Prompt Benchmark: Key Terms
+# MAGIC
+# MAGIC The cell below sends a **single large executive prompt** (the same CFO-style prompt used at baseline) to the Supervisor Agent and scores how many of the 45 ground truth values appear in the response.
+# MAGIC
+# MAGIC ### What This Measures
+# MAGIC
+# MAGIC * **Coverage Score** — How many of 45 GT values the Supervisor surfaces in one comprehensive response. Not all 45 are expected — the prompt is broad and the agent must prioritize.
+# MAGIC * **Indirect Improvement** — UC features added for individual tests (metric views, SQL functions, column comments) may also improve the Supervisor’s ability to surface those metrics in a single report. This measures that transfer effect.
+# MAGIC * **Progression** — Coverage at Baseline vs After Iteration 1 vs After Iteration 2 vs After Iteration 3. If coverage grows, the UC semantic layer is helping even for unstructured comprehensive queries.
+# MAGIC
+# MAGIC ### Scope: 27 of 45 Tests
+# MAGIC
+# MAGIC Only **27 tests** come directly from the CFO prompt (see cell 6 mapping table). The other **18 are Curator-added edge cases** — wrong-table traps (H01-H02), status ambiguity (H03-H04), continent drill-downs (D05-D07), indirect derivations (F01-F06), and complements (A02, A06). These require targeted questions, not a broad ask.
+# MAGIC
+# MAGIC Scoring the Supervisor on all 45 inflates the "missing" count unfairly. The correct denominator is **27**, not 45.
+# MAGIC
+# MAGIC ### Scoring Categories (in-scope tests only)
+# MAGIC
+# MAGIC | Category | What It Means |
+# MAGIC | --- | --- |
+# MAGIC | **Found + Correct** | Supervisor surfaced this metric AND the value matched ground truth |
+# MAGIC | **Not Found** | Supervisor didn’t surface this metric in the response |
+# MAGIC | **Bonus Coverage** | Curator-added edge cases that the Supervisor found anyway (not expected) |
+# MAGIC
+# MAGIC ### Important Caveats
+# MAGIC
+# MAGIC * This benchmark sends **1 API call** to the Supervisor (not 45 individual ones). The Supervisor routes to sub-agents and synthesizes.
+# MAGIC * A metric that the Supervisor doesn’t mention is a **prompt-coverage gap** (the Supervisor didn’t ask about it), not an accuracy failure.
+# MAGIC * Out-of-scope metrics found are "bonus" — the Supervisor happened to surface them, but they weren’t part of the original prompt.
+
+# COMMAND ----------
+
 # DBTITLE 1,DEEP RELIABILITY ANALYSIS: How Consistent Are Agent Answers?
 # ============================================================
 # DEEP RELIABILITY ANALYSIS: How Consistent Are Agent Answers?
@@ -5643,39 +6017,93 @@ print(f"  1. SQL PATTERN CONSISTENCY: Does the agent write the same SQL each tim
 print(f"{'='*110}")
 
 def extract_sql_signature(sql):
-    """Normalize SQL into a comparable signature: table + aggregation + WHERE sketch."""
+    """Normalize SQL into a comparable signature: table + aggregation + sorted WHERE conditions.
+    Normalizations: (1) collapse whitespace, (2) sort AND conditions,
+    (3) strip DATE keyword from date literals, (4) generous cutoff."""
     if not sql: return "(no SQL)"
-    sql_lower = sql.lower().replace('`', '').replace('"', '')
+    # Collapse ALL whitespace (newlines, tabs, multiple spaces) to single space
+    sql_lower = ' '.join(sql.lower().replace('`', '').replace('"', '').split())
+    # Normalize date literals: DATE '2026-08-01' → '2026-08-01'
+    sql_lower = re.sub(r"date\s+'", "'", sql_lower)
     tables = re.findall(r'from\s+(\w+(?:\.\w+)*)', sql_lower)
     aggs = sorted(set(re.findall(r'(count|sum|avg|min|max)\s*\(', sql_lower)))
-    where = re.search(r'where\s+(.+?)(?:\s+group|\s+order|\s+limit|\s+having|$)', sql_lower, re.DOTALL)
-    where_sketch = where.group(1).strip()[:100] if where else "(no WHERE)"
+    where = re.search(r'where\s+(.+?)(?:\s+group\s|\s+order\s|\s+limit\s|\s+having\s|$)', sql_lower)
+    if where:
+        # Sort AND-separated conditions so clause order doesn't matter
+        conditions = sorted(c.strip() for c in re.split(r'\s+and\s+', where.group(1).strip()) if c.strip())
+        where_sketch = ' AND '.join(conditions)[:200]
+    else:
+        where_sketch = "(no WHERE)"
     return f"{tables[0] if tables else '?'} | {'+'.join(aggs) if aggs else 'select'} | {where_sketch}"
 
-sql_consistent_count = 0
-sql_inconsistent = []
+def extract_structural_sig(sql):
+    """Coarse signature: table + agg functions only (ignores WHERE details).
+    Two queries with the same structural sig used the same approach."""
+    if not sql: return "(no SQL)"
+    sql_lower = ' '.join(sql.lower().replace('`', '').replace('"', '').split())
+    tables = re.findall(r'from\s+(\w+(?:\.\w+)*)', sql_lower)
+    aggs = sorted(set(re.findall(r'(count|sum|avg|min|max)\s*\(', sql_lower)))
+    return f"{tables[0] if tables else '?'} | {'+'.join(aggs) if aggs else 'select'}"
+
+# ── Categorize each test's SQL evolution ──
+# SQL SHOULD change across iterations (that's the demo!) — what matters is STABILIZATION.
+# Categories:
+#   \U0001f7e2 STABLE      = same signature ALL iterations
+#   \U0001f535 STABILIZED  = changed early, but last 2 iterations match
+#   \U0001f7e1 CONVERGING  = structural approach (table+agg) stabilized, WHERE details differ
+#   \U0001f534 VOLATILE    = SQL still changing in the latest iteration
+
+sql_categories = {'STABLE': [], 'STABILIZED': [], 'CONVERGING': [], 'VOLATILE': []}
+sql_details = []
+
 for aid in sorted(test_history.keys()):
-    sigs = [extract_sql_signature(h['sql']) for h in test_history[aid] if h['sql']]
-    if len(set(sigs)) <= 1:
-        sql_consistent_count += 1
-    elif sigs:
-        sql_inconsistent.append((aid, sigs, test_history[aid]))
+    hist = test_history[aid]
+    sigs = [(extract_sql_signature(h['sql']), extract_structural_sig(h['sql']), h) for h in hist if h['sql']]
+    full_sigs = [s[0] for s in sigs]
+    struct_sigs = [s[1] for s in sigs]
+
+    if len(full_sigs) <= 1:
+        cat = 'STABLE'
+    elif len(set(full_sigs)) == 1:
+        cat = 'STABLE'
+    elif len(full_sigs) >= 2 and full_sigs[-1] == full_sigs[-2]:
+        cat = 'STABILIZED'
+    elif len(struct_sigs) >= 2 and struct_sigs[-1] == struct_sigs[-2]:
+        cat = 'CONVERGING'
+    else:
+        cat = 'VOLATILE'
+
+    sql_categories[cat].append(aid)
+    desc = next((a[4] for a in assumptions if a[0] == aid), "")[:55]
+    sql_details.append((aid, cat, desc, sigs))
 
 total_with_sql = sum(1 for aid in test_history if any(h['sql'] for h in test_history[aid]))
-sql_pct = 100 * sql_consistent_count // max(total_with_sql, 1)
-print(f"\n  Consistent SQL: {sql_consistent_count}/{total_with_sql} ({sql_pct}%)")
-print(f"  Changed SQL between iterations: {len(sql_inconsistent)}")
+stable_n = len(sql_categories['STABLE'])
+stabilized_n = len(sql_categories['STABILIZED'])
+converging_n = len(sql_categories['CONVERGING'])
+volatile_n = len(sql_categories['VOLATILE'])
+locked_n = stable_n + stabilized_n  # SQL is locked in the last 2 iterations
+locked_pct = 100 * locked_n // max(total_with_sql, 1)
 
-if sql_inconsistent:
-    print(f"\n  \u2500\u2500 Tests with SQL Pattern Changes \u2500\u2500")
-    for aid, sigs, hist in sql_inconsistent[:12]:
-        desc = next((a[4] for a in assumptions if a[0] == aid), "")[:60]
-        print(f"\n  {aid}: {desc}")
-        for h in hist:
-            if not h['sql']: continue
-            icon = '\u2705' if h['verdict'] == 'PASS' else '\u274c'
-            sig = extract_sql_signature(h['sql'])[:95]
-            print(f"    {icon} {h['stage']:30s} \u2192 {sig}")
+print(f"\n  SQL stabilized in last 2 iterations: {locked_n}/{total_with_sql} ({locked_pct}%)")
+print(f"")
+print(f"  \U0001f7e2 STABLE      (same SQL ALL iterations):          {stable_n}")
+print(f"  \U0001f535 STABILIZED  (changed early, locked in last 2):   {stabilized_n}")
+print(f"  \U0001f7e1 CONVERGING  (same table+agg, WHERE differs):     {converging_n}")
+print(f"  \U0001f534 VOLATILE    (still changing in latest iteration): {volatile_n}")
+
+# ── Show ALL 45 tests with full (untruncated) signatures ──
+cat_icons = {'STABLE': '\U0001f7e2', 'STABILIZED': '\U0001f535', 'CONVERGING': '\U0001f7e1', 'VOLATILE': '\U0001f534'}
+print(f"\n  \u2500\u2500 All {len(sql_details)} Tests: SQL Evolution Across Iterations \u2500\u2500")
+for aid, cat, desc, sigs in sql_details:
+    print(f"\n  {cat_icons[cat]} {aid} [{cat}]: {desc}")
+    for full_sig, struct_sig, h in sigs:
+        icon = '\u2705' if h['verdict'] == 'PASS' else '\u274c'
+        print(f"    {icon} {h['stage']:30s} \u2192 {full_sig}")
+
+# Update sql_consistent_count for downstream sections (pie chart etc.)
+sql_consistent_count = locked_n
+sql_inconsistent = [(aid, [s[0] for s in sigs], [s[2] for s in sigs]) for aid, cat, desc, sigs in sql_details if cat in ('VOLATILE', 'CONVERGING')]
 
 # ── 2. PROVENANCE STABILITY ─────────────────────────────────────────────────
 print(f"\n{'='*110}")
@@ -5684,7 +6112,7 @@ print(f"{'='*110}")
 
 def _conf(tier):
     """Map provenance tier to confidence level."""
-    if tier in ('Iter 2', 'Iter 3'): return 'DETERMINISTIC'
+    if tier in ('Iter 2', 'Iter 3') or tier.startswith('Iter 3'): return 'DETERMINISTIC'
     if tier == 'Iter 1': return 'HEURISTIC'
     if 'Guessed' in str(tier) or tier == 'GUESSED': return 'GUESSED'
     if tier == 'N/A': return 'N/A'
@@ -5700,11 +6128,11 @@ for aid in sorted(test_history.keys()):
     elif first_c == last_c == 'DETERMINISTIC': stayed_det.append(aid)
     elif first_c in ('DETERMINISTIC','HEURISTIC') and last_c in ('INFERRED','GUESSED'): regressed_prov.append(aid)
 
-print(f"\n  \u2705 Converged to DETERMINISTIC: {len(converged)} tests (Baseline \u2192 governed asset)")
+print(f"\n  \u2705 Converged to DETERMINISTIC: {len(converged)} tests (raw table \u2192 governed asset)")
 if converged: print(f"     {', '.join(converged)}")
 print(f"  \u2705 Always DETERMINISTIC: {len(stayed_det)} tests")
 if stayed_det: print(f"     {', '.join(stayed_det)}")
-print(f"  \u26a0  Always BASELINE: {len(stayed_baseline)} tests (never used a governed asset)")
+print(f"  \u26a0  Always INFERRED (raw table): {len(stayed_baseline)} tests (never used a governed asset)")
 if stayed_baseline: print(f"     {', '.join(stayed_baseline)}")
 if regressed_prov:
     print(f"  \u274c Regressed: {len(regressed_prov)} tests (governed \u2192 raw)")
@@ -5809,7 +6237,7 @@ det_n = tier_stats.get('DETERMINISTIC', {}).get('n', 0)
 
 print(f"\n  Latest pass rate ({last_stage}): {last_pass}/{total} ({100*last_pass//total}%)")
 print(f"  DETERMINISTIC coverage: {det_n}/{total} ({100*det_n//total}%) tests backed by governed assets")
-print(f"  SQL pattern stability: {sql_consistent_count}/{total_with_sql} ({sql_pct}%)")
+print(f"  SQL stabilized (locked in last 2 iterations): {locked_n}/{total_with_sql} ({locked_pct}%)")
 print(f"  Value stability: {val_stable}/{total} ({100*val_stable//total}%)")
 print(f"\n  \u250c{'\u2500'*72}\u2510")
 print(f"  \u2502  KEY FINDING: UC semantic features improve RELIABILITY, not just     \u2502")
@@ -5865,21 +6293,25 @@ for i, v in enumerate(conf_pass_rates):
 ax2.invert_yaxis()
 ax2.legend(fontsize=8)
 
-# Panel 3: SQL stability pie
+# Panel 3: SQL stability pie (4 categories)
 ax3 = axes[2]
-sizes = [sql_consistent_count, len(sql_inconsistent)]
-labels_pie = [f'Stable SQL\n({sql_consistent_count})', f'Changed SQL\n({len(sql_inconsistent)})']
-colors_pie = ['#1b5e20', '#e65100']
-ax3.pie(sizes, labels=labels_pie, colors=colors_pie, autopct='%1.0f%%',
-        startangle=90, textprops={'fontsize': 10, 'fontweight': 'bold'})
-ax3.set_title('SQL Pattern Stability', fontweight='bold')
+sizes_pie = [stable_n, stabilized_n, converging_n, volatile_n]
+labels_pie = [f'\U0001f7e2 Stable\n({stable_n})', f'\U0001f535 Stabilized\n({stabilized_n})',
+              f'\U0001f7e1 Converging\n({converging_n})', f'\U0001f534 Volatile\n({volatile_n})']
+colors_pie = ['#1b5e20', '#1565c0', '#f9a825', '#c62828']
+# Remove zero-sized slices
+filt = [(s, l, c) for s, l, c in zip(sizes_pie, labels_pie, colors_pie) if s > 0]
+if filt:
+    ax3.pie([f[0] for f in filt], labels=[f[1] for f in filt], colors=[f[2] for f in filt],
+            autopct='%1.0f%%', startangle=90, textprops={'fontsize': 10, 'fontweight': 'bold'})
+ax3.set_title(f'SQL Stabilization ({locked_n}/{total_with_sql} locked)', fontweight='bold')
 
 plt.tight_layout()
 plt.show()
 
 # COMMAND ----------
 
-# DBTITLE 1,ROBUSTNESS TEST: Question Variation Consistency (10 hardest × 3 variations)
+# DBTITLE 1,ROBUSTNESS TEST: Question Variation Consistency (10 hardest x 3 variations)
 # ============================================================
 # ROBUSTNESS TEST: Question Variation Consistency
 # ============================================================
@@ -6003,7 +6435,7 @@ ROBUSTNESS_TESTS = [
 
 # Confidence helper (in case cell 20 didn't run)
 def _conf_robust(tier):
-    if tier in ('Iter 2', 'Iter 3'): return 'DETERMINISTIC'
+    if tier in ('Iter 2', 'Iter 3') or tier.startswith('Iter 3'): return 'DETERMINISTIC'
     if tier == 'Iter 1': return 'HEURISTIC'
     if 'Guessed' in str(tier) or tier == 'GUESSED': return 'GUESSED'
     if tier == 'N/A': return 'N/A'
@@ -6109,7 +6541,7 @@ for conf in ['DETERMINISTIC', 'HEURISTIC', 'INFERRED', 'GUESSED']:
 print(f"\n  \u250c{'\u2500'*72}\u2510")
 print(f"  \u2502  KEY FINDING: Questions backed by DETERMINISTIC governance          \u2502")
 print(f"  \u2502  (Metric Views, SQL Functions) should be robust to rephrasing.      \u2502")
-print(f"  \u2502  BASELINE questions may fail when vocabulary changes because the    \u2502")
+print(f"  \u2502  INFERRED-tier questions may fail when vocabulary changes because the    \u2502")
 print(f"  \u2502  agent relies on column-name matching, which is fragile.            \u2502")
 print(f"  \u2514{'\u2500'*72}\u2518")
 print(f"{'='*110}")
@@ -6131,14 +6563,28 @@ from collections import defaultdict
 
 # ── Compute per-test RELIABILITY & DEPENDABILITY scores ──
 def _extract_sig(sql):
-    """Local SQL signature extractor (self-contained)."""
-    if not sql: return "(no SQL)"
-    sl = sql.lower().replace('`', '').replace('"', '')
+    """Normalized SQL signature: collapses whitespace, sorts AND conditions.
+    Returns (structural_sig, full_sig) tuple:
+      structural = table + agg functions only (coarse — catches same-approach-different-filters)
+      full       = table + agg + sorted WHERE conditions (fine — catches exact SQL match)"""
+    if not sql: return ("(no SQL)", "(no SQL)")
+    # Collapse ALL whitespace to single spaces
+    sl = ' '.join(sql.lower().replace('`', '').replace('"', '').split())
+    # Normalize date literals: DATE '2026-08-01' → '2026-08-01'
+    sl = re.sub(r"date\s+'", "'", sl)
     tables = re.findall(r'from\s+(\w+(?:\.\w+)*)', sl)
     aggs = sorted(set(re.findall(r'(count|sum|avg|min|max)\s*\(', sl)))
-    where = re.search(r'where\s+(.+?)(?:\s+group|\s+order|\s+limit|\s+having|$)', sl, re.DOTALL)
-    ws = where.group(1).strip()[:80] if where else "(none)"
-    return f"{tables[0] if tables else '?'}|{'+'.join(aggs) if aggs else 'sel'}|{ws}"
+    table_str = tables[0] if tables else '?'
+    agg_str = '+'.join(aggs) if aggs else 'sel'
+    where = re.search(r'where\s+(.+?)(?:\s+group\s|\s+order\s|\s+limit\s|\s+having\s|$)', sl)
+    if where:
+        conditions = sorted(c.strip() for c in re.split(r'\s+and\s+', where.group(1).strip()) if c.strip())
+        where_sketch = ' AND '.join(conditions)[:150]
+    else:
+        where_sketch = "(none)"
+    structural_sig = f"{table_str}|{agg_str}"
+    full_sig = f"{table_str}|{agg_str}|{where_sketch}"
+    return (structural_sig, full_sig)
 
 test_scores = []
 for test in ROBUSTNESS_TESTS:
@@ -6148,46 +6594,84 @@ for test in ROBUSTNESS_TESTS:
     total_v = len(test_res) if test_res else 3
     reliability = 100 * passes / max(total_v, 1)
 
-    # DEPENDABILITY: SQL consistency across variations
-    sigs = [_extract_sig(r.get("sql")) for r in test_res if r.get("sql")]
-    if len(sigs) >= 2:
-        unique_sigs = len(set(sigs))
-        if unique_sigs == 1: dependability = 100
-        elif unique_sigs == 2: dependability = 67
-        else: dependability = 33
-    elif len(sigs) == 1:
+    # DEPENDABILITY: multi-level SQL consistency across variations
+    # Level 1 (structural): same table + same agg functions — structurally equivalent
+    # Level 2 (full): same table + same agg + same sorted WHERE — identical SQL
+    sig_pairs = [_extract_sig(r.get("sql")) for r in test_res if r.get("sql")]
+    structural_sigs = [s[0] for s in sig_pairs]
+    full_sigs = [s[1] for s in sig_pairs]
+    if len(sig_pairs) >= 2:
+        unique_full = len(set(full_sigs))
+        unique_structural = len(set(structural_sigs))
+        if unique_full == 1:
+            dependability = 100
+            dep_label = "Identical SQL"
+        elif unique_structural == 1:
+            # Same table + same agg, different WHERE details — structurally equivalent
+            dependability = 85
+            dep_label = "Same structure, different filters"
+        elif unique_structural == 2:
+            dependability = 60
+            dep_label = "Mixed approaches"
+        else:
+            dependability = 33
+            dep_label = "Genuinely different SQL"
+    elif len(sig_pairs) == 1:
         dependability = 50
+        dep_label = "Only 1 SQL available"
     else:
         dependability = 0
+        dep_label = "No SQL generated"
 
-    # Boost if ALL governed (DETERMINISTIC) — the agent is locked to a governed asset
     tiers = [_conf_robust(r.get('prov_iter', 'Unknown')) for r in test_res]
-    if tiers and all(t == 'DETERMINISTIC' for t in tiers):
-        dependability = min(100, dependability + 10)
+
+    # Functional equivalence: different SQL but same correct result
+    if dependability < 100 and reliability == 100:
+        func_equiv = True  # all PASS despite different SQL
+    else:
+        func_equiv = False
 
     test_scores.append({
         'id': aid, 'desc': test['desc'][:42],
         'reliability': round(reliability, 1),
         'dependability': min(100, round(dependability, 1)),
+        'dep_label': dep_label,
+        'func_equiv': func_equiv,
         'passes': passes, 'total': total_v,
         'verdicts': [r.get('verdict', '?') for r in test_res],
         'tiers': tiers,
+        'structural_sigs': structural_sigs,
+        'full_sigs': full_sigs,
     })
 
 # ── Print scores table ──
 print(f"\n{'='*110}")
 print(f"  RELIABILITY & DEPENDABILITY SCORES (per test)")
 print(f"{'='*110}")
-print(f"\n  {'Test':<6} {'Reliability':>12} {'Dependability':>14} {'Verdict':>10} {'Governance Tier':<22} {'Description'}")
-print(f"  {'\u2500'*6} {'\u2500'*12} {'\u2500'*14} {'\u2500'*10} {'\u2500'*22} {'\u2500'*40}")
+print(f"\n  {'Test':<6} {'Reliability':>12} {'Dependability':>14} {'SQL Assessment':<30} {'Equiv?':<8} {'Tier':<16} {'Description'}")
+print(f"  {'\u2500'*6} {'\u2500'*12} {'\u2500'*14} {'\u2500'*30} {'\u2500'*8} {'\u2500'*16} {'\u2500'*40}")
 for s in test_scores:
     tier_str = '/'.join(set(s['tiers'])) if s['tiers'] else '?'
-    v_str = '/'.join(s['verdicts'][:3])
-    print(f"  {s['id']:<6} {s['reliability']:>11.0f}% {s['dependability']:>13.0f}% {v_str:>10} {tier_str:<22} {s['desc']}")
+    eq_str = '\u2705 Yes' if s['func_equiv'] else '\u2500'
+    print(f"  {s['id']:<6} {s['reliability']:>11.0f}% {s['dependability']:>13.0f}% {s['dep_label']:<30} {eq_str:<8} {tier_str:<16} {s['desc']}")
 
 avg_rel = sum(s['reliability'] for s in test_scores) / len(test_scores)
 avg_dep = sum(s['dependability'] for s in test_scores) / len(test_scores)
+func_equiv_count = sum(1 for s in test_scores if s['func_equiv'])
 print(f"\n  AVERAGES: Reliability={avg_rel:.0f}%  Dependability={avg_dep:.0f}%")
+print(f"  Functionally equivalent (different SQL, same correct result): {func_equiv_count}/{len(test_scores)}")
+
+print(f"\n  \u250c{'\u2500'*80}\u2510")
+print(f"  \u2502  WHAT THE SCORES MEAN:                                                         \u2502")
+print(f"  \u2502  100%  Identical SQL      = same normalized query every time \u2014 fully locked      \u2502")
+print(f"  \u2502   85%  Same structure      = same table + agg, slightly different WHERE filters   \u2502")
+print(f"  \u2502   60%  Mixed approaches    = 2 of 3 used the same table/agg                      \u2502")
+print(f"  \u2502   33%  Genuinely different = each variation chose a different SQL strategy         \u2502")
+print(f"  \u2502                                                                                   \u2502")
+print(f"  \u2502  FUNCTIONAL EQUIVALENCE (\u2705): SQL is different but ALL variations                 \u2502")
+print(f"  \u2502  produced the correct answer. The agent took different paths to the same           \u2502")
+print(f"  \u2502  result \u2014 reliable today, but not locked to a single approach.                    \u2502")
+print(f"  \u2514{'\u2500'*80}\u2518")
 print(f"{'='*110}")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -6224,7 +6708,7 @@ ax1.legend(handles=[
 
 # ══ Panel 2 (top-right): DEPENDABILITY SCORE per test ══
 ax2 = fig.add_subplot(gs[0, 1])
-dep_colors = ['#0d47a1' if d >= 100 else '#42a5f5' if d >= 67 else '#ef6c00' if d > 0 else '#b71c1c' for d in dep_scores]
+dep_colors = ['#0d47a1' if d >= 100 else '#1976d2' if d >= 85 else '#42a5f5' if d >= 60 else '#ef6c00' if d > 0 else '#b71c1c' for d in dep_scores]
 ax2.bar(range(len(test_ids)), dep_scores, color=dep_colors, edgecolor='white', width=0.7)
 ax2.set_xticks(range(len(test_ids)))
 ax2.set_xticklabels(test_ids, fontsize=11, fontweight='bold')
@@ -6237,9 +6721,10 @@ ax2.axhline(y=67, color='#42a5f5', linestyle='--', alpha=0.15)
 for i, v in enumerate(dep_scores):
     ax2.text(i, v + 2, f'{v:.0f}%', ha='center', fontsize=10, fontweight='bold')
 ax2.legend(handles=[
-    Patch(facecolor='#0d47a1', label='100% \u2014 Same SQL every time'),
-    Patch(facecolor='#42a5f5', label='67% \u2014 Mostly consistent'),
-    Patch(facecolor='#ef6c00', label='33% \u2014 Inconsistent SQL'),
+    Patch(facecolor='#0d47a1', label='100% \u2014 Identical SQL'),
+    Patch(facecolor='#1976d2', label='85% \u2014 Same structure, different filters'),
+    Patch(facecolor='#42a5f5', label='60% \u2014 Mixed approaches'),
+    Patch(facecolor='#ef6c00', label='33% \u2014 Genuinely different SQL'),
     Patch(facecolor='#b71c1c', label='0% \u2014 No SQL / all errors')],
     loc='upper right', fontsize=9, framealpha=0.9)
 
@@ -6316,7 +6801,7 @@ if gov_total > 0:
              ha='center', fontsize=12, color='#1b5e20', fontweight='bold')
     y_pos -= 0.65
 if base_total > 0:
-    ax4.text(5, y_pos, f'\u26a0  Ungoverned (BASELINE): {base_pass}/{base_total} ({100*base_pass//max(base_total,1)}%)',
+    ax4.text(5, y_pos, f'\u26a0  Ungoverned (INFERRED): {base_pass}/{base_total} ({100*base_pass//max(base_total,1)}%)',
              ha='center', fontsize=12, color='#e65100', fontweight='bold')
     y_pos -= 0.65
 if guess_total > 0:
@@ -6342,23 +6827,52 @@ plt.show()
 # COMPREHENSIVE PROMPT BENCHMARK: LIVE Supervisor Call
 #
 # Sends the SAME large executive prompt to the Supervisor Agent
-# and scores how many of the 45 GT values appear in the response.
+# and scores how many GT values appear in the response.
 #
-# KEY QUESTION: Do the UC semantic improvements we made for the
-# 45 individual metric prompts INDIRECTLY improve the Supervisor's
-# ability to surface those metrics in a single comprehensive report?
+# SCOPE: The large prompt directly asks about 27 of the 45 tests.
+# The other 18 are Curator-added edge cases (wrong-table traps,
+# status ambiguity, continent drill-downs, indirect derivations)
+# that the prompt never mentions. Scoring the Supervisor on those
+# 18 is unfair — they require targeted questions, not a broad ask.
 #
-# This is NOT about hitting all 40 — it's about which metrics
-# the Supervisor CONSISTENTLY surfaces, and whether that set
-# grows after UC features are applied.
+# SCORING (in-scope tests only):
+#   1. FOUND + CORRECT  — Supervisor surfaced it, value matched GT
+#   2. FOUND + WRONG    — Supervisor mentioned it, but value was off
+#   3. NOT FOUND        — Supervisor didn’t surface this metric
+#
+# Out-of-scope tests are shown separately as "bonus coverage."
 # ============================================================
+
+# ── Define prompt scope from cell 6 mapping ──
+# These 27 tests map directly to a fragment of the CFO prompt.
+# The other 18 are Curator-added edge cases (A02,A06,D05-D07,F01-F06,H01-H07).
+COMP_PROMPT_DIRECT = {
+    # "revenue decline vs July — August and July revenue, dollar change, pct change"
+    'B01', 'B02', 'B03', 'B04',
+    # "on-time delivery rate and average delay"
+    'A01', 'A03',
+    # "How many total shipments went out and how many were late?"
+    'A04', 'A05',
+    # "current fill rate"
+    'E01',
+    # "inventory positions below safety stock, unique SKUs, days of supply, stocked out"
+    'C01', 'C02', 'C03', 'C04', 'C05',
+    # "percentage of vendors delivered late, POs late, lead time variance, SLA penalties"
+    'D01', 'D02', 'D03', 'D04', 'E02',
+    # "Cost of Disruption by region"
+    'E03',
+    # "miss our Q3 service-level targets"
+    'G01', 'G02',
+    # "Logistics Risk Standards / Demand Anomaly / Inventory Standards / Quality Min / Disruption Threshold"
+    'P01', 'P02', 'P03', 'P04', 'P05',
+}
 
 print("="*90)
 print("  COMPREHENSIVE PROMPT BENCHMARK: After Iteration 3 (LIVE)")
 print("="*90)
-print("  Sending the full executive prompt to the Supervisor Agent...")
-print("  Same prompt used in baseline benchmark (cell 6).")
-print("  Question: did UC semantic improvements indirectly improve coverage?\n")
+print(f"  Scope: {len(COMP_PROMPT_DIRECT)} tests directly from the CFO prompt")
+print(f"  Out of scope: {45 - len(COMP_PROMPT_DIRECT)} Curator-added edge cases (shown separately)")
+print("  Sending the full executive prompt to the Supervisor Agent...\n")
 
 # Use stored results if available from iteration cells, otherwise make live call
 comp_iter3 = all_comp_results.get("After Iteration 3")
@@ -6386,10 +6900,13 @@ if comp_iter3:
     stages.append(("After Iter 3 (all UC features)", comp_iter3))
 
 if stages:
-    print(f"\n  {'Stage':<50} {'Found':>6} {'Total':>6} {'Coverage':>10}")
-    print(f"  {'\u2500'*50} {'\u2500'*6} {'\u2500'*6} {'\u2500'*10}")
+    print(f"\n  {'Stage':<50} {'All 45':>8} {'In-Scope':>10} {'Coverage':>10}")
+    print(f"  {'\u2500'*50} {'\u2500'*8} {'\u2500'*10} {'\u2500'*10}")
     for label, data in stages:
-        print(f"  {label:<50} {data['found']:>6}/{data['total']:<6} {data['pct']:>9}%")
+        all_found = {r['id'] for r in data['results'] if 'FOUND' in r['verdict'] and 'NOT' not in r['verdict']}
+        in_scope_n = len(all_found & COMP_PROMPT_DIRECT)
+        in_pct = 100 * in_scope_n // max(len(COMP_PROMPT_DIRECT), 1)
+        print(f"  {label:<50} {data['found']:>3}/45   {in_scope_n:>4}/{len(COMP_PROMPT_DIRECT):<4} {in_pct:>9}%")
 else:
     print("  (No benchmark data \u2014 run a full E2E to populate comp_baseline)")
 
@@ -6399,8 +6916,8 @@ if len(stages) >= 2 and comp_iter3:
     first_label, first_data = stages[0]
     last_label, last_data = stages[-1]
 
-    first_found = {r["id"] for r in first_data["results"] if "FOUND" in r["verdict"]}
-    last_found  = {r["id"] for r in last_data["results"] if "FOUND" in r["verdict"]}
+    first_found = {r["id"] for r in first_data["results"] if "FOUND" in r["verdict"] and "NOT" not in r["verdict"]}
+    last_found  = {r["id"] for r in last_data["results"] if "FOUND" in r["verdict"] and "NOT" not in r["verdict"]}
 
     consistent_hit  = sorted(first_found & last_found)         # always found
     newly_found     = sorted(last_found - first_found)         # gained after UC features
@@ -6413,68 +6930,86 @@ if len(stages) >= 2 and comp_iter3:
     def get_desc(results, mid):
         return next((r.get("desc","")[:65] for r in results if r["id"] == mid), "")
 
+    # \u2500\u2500 3-CATEGORY SCORING: In-Scope Tests Only \u2500\u2500
+    # Split results into in-scope (directly from prompt) vs out-of-scope (Curator-added)
+    in_scope_found = sorted(last_found & COMP_PROMPT_DIRECT)
+    in_scope_missing = sorted(COMP_PROMPT_DIRECT - last_found)
+    out_scope_found = sorted(last_found - COMP_PROMPT_DIRECT)
+    out_scope_missing = sorted((set(r['id'] for r in last_data['results']) - last_found) - COMP_PROMPT_DIRECT)
+
     print(f"\n{'='*90}")
-    print(f"  PER-METRIC CONSISTENCY ANALYSIS")
-    print(f"  Comparing: {first_label} \u2192 {last_label}")
+    print(f"  IN-SCOPE SCORING ({len(COMP_PROMPT_DIRECT)} tests directly from the CFO prompt)")
+    print(f"  Stage: {last_label}")
     print(f"{'='*90}")
 
-    print(f"\n  \u2705 CONSISTENTLY FOUND ({len(consistent_hit)} metrics \u2014 Supervisor always surfaces these):")
-    for mid in consistent_hit:
+    print(f"\n  \u2705 FOUND + CORRECT ({len(in_scope_found)}/{len(COMP_PROMPT_DIRECT)}):")
+    for mid in in_scope_found:
         print(f"     {mid:<6} {get_desc(last_data['results'], mid)}")
 
-    if newly_found:
-        print(f"\n  \U0001f195 NEWLY FOUND after UC improvements ({len(newly_found)} metrics \u2014 INDIRECT improvement):")
-        for mid in newly_found:
+    print(f"\n  \u2b1b NOT FOUND ({len(in_scope_missing)}/{len(COMP_PROMPT_DIRECT)}):")
+    for mid in in_scope_missing:
+        print(f"     {mid:<6} {get_desc(last_data['results'], mid)}")
+
+    in_scope_pct = 100 * len(in_scope_found) // max(len(COMP_PROMPT_DIRECT), 1)
+    print(f"\n  IN-SCOPE COVERAGE: {len(in_scope_found)}/{len(COMP_PROMPT_DIRECT)} ({in_scope_pct}%)")
+
+    # \u2500\u2500 Bonus: Out-of-scope tests the Supervisor found anyway \u2500\u2500
+    if out_scope_found:
+        print(f"\n  \U0001f31f BONUS COVERAGE ({len(out_scope_found)} Curator-added tests the Supervisor found anyway):")
+        for mid in out_scope_found:
             print(f"     {mid:<6} {get_desc(last_data['results'], mid)}")
+    if out_scope_missing:
+        print(f"\n  \u2500 OUT OF SCOPE ({len(out_scope_missing)} Curator-added tests \u2014 not expected from this prompt):")
+        for mid in out_scope_missing[:8]:
+            print(f"     {mid:<6} {get_desc(last_data['results'], mid)}")
+        if len(out_scope_missing) > 8:
+            print(f"     ... and {len(out_scope_missing) - 8} more")
 
-    if regressed:
-        print(f"\n  \u26a0\ufe0f REGRESSED ({len(regressed)} metrics \u2014 found before, missing now):")
-        for mid in regressed:
-            print(f"     {mid:<6} {get_desc(first_data['results'], mid)}")
+    # \u2500\u2500 Progression: in-scope only \u2500\u2500
+    first_in_scope_found = len(first_found & COMP_PROMPT_DIRECT)
+    last_in_scope_found = len(in_scope_found)
+    print(f"\n  PROGRESSION (in-scope only): {first_in_scope_found}/{len(COMP_PROMPT_DIRECT)} \u2192 {last_in_scope_found}/{len(COMP_PROMPT_DIRECT)}")
 
-    print(f"\n  \u2b1b CONSISTENTLY MISSING ({len(consistent_miss)} metrics \u2014 prompt never surfaces these):")
-    for mid in consistent_miss:
-        print(f"     {mid:<6} {get_desc(last_data['results'], mid)}")
-
-    # ── Coverage by group ──
-    print(f"\n  {'\u2500'*70}")
-    print(f"  COVERAGE BY METRIC GROUP:")
-    print(f"  {'Group':<20} {'Baseline':>10} {'After Iter 3':>14} {'Delta':>8}")
-    print(f"  {'\u2500'*20} {'\u2500'*10} {'\u2500'*14} {'\u2500'*8}")
+    # ── Coverage by group (in-scope only) ──
+    print(f"\n  {'\u2500'*80}")
+    print(f"  COVERAGE BY METRIC GROUP (in-scope tests only):")
+    print(f"  {'Group':<22} {'Scope':>6} {'Baseline':>10} {'After Iter 3':>14} {'Delta':>8}")
+    print(f"  {'\u2500'*22} {'\u2500'*6} {'\u2500'*10} {'\u2500'*14} {'\u2500'*8}")
     for prefix, name in [('A','Logistics'), ('B','Revenue'), ('C','Inventory'),
                          ('D','Supplier'), ('E','Cross-domain'), ('F','Indirect'),
                          ('G','Q3 Fiscal'), ('H','Hard derivations'),
                          ('P','Critical Thresholds')]:
         grp_ids = [r["id"] for r in last_data["results"] if r["id"].startswith(prefix)]
-        base_hits = sum(1 for mid in grp_ids if mid in first_found)
-        iter3_hits = sum(1 for mid in grp_ids if mid in last_found)
+        in_scope_ids = [mid for mid in grp_ids if mid in COMP_PROMPT_DIRECT]
+        base_hits = sum(1 for mid in in_scope_ids if mid in first_found)
+        iter3_hits = sum(1 for mid in in_scope_ids if mid in last_found)
         delta = iter3_hits - base_hits
         delta_str = f"+{delta}" if delta > 0 else str(delta) if delta < 0 else "\u2014"
-        print(f"  {name:<20} {base_hits:>4}/{len(grp_ids):<5} {iter3_hits:>8}/{len(grp_ids):<5} {delta_str:>8}")
+        scope_str = f"{len(in_scope_ids)}/{len(grp_ids)}"
+        if not in_scope_ids:
+            print(f"  {name:<22} {scope_str:>6} {'\u2014':>10} {'\u2014':>14} {'\u2014':>8}  (all Curator-added)")
+        else:
+            print(f"  {name:<22} {scope_str:>6} {base_hits:>4}/{len(in_scope_ids):<5} {iter3_hits:>8}/{len(in_scope_ids):<5} {delta_str:>8}")
 
     # ── Verdict ──
-    delta = len(last_found) - len(first_found)
+    delta_scope = last_in_scope_found - first_in_scope_found
     print(f"\n{'='*90}")
-    print(f"  VERDICT: {first_data['found']}/{first_data['total']} \u2192 {last_data['found']}/{last_data['total']}")
-    if delta > 0:
-        print(f"  \u2705 YES \u2014 UC semantic improvements INDIRECTLY improved the comprehensive")
-        print(f"     prompt by +{delta} metrics. The semantic layer helps even when the")
-        print(f"     Supervisor must decompose one complex question into sub-queries.")
-    elif delta == 0:
-        print(f"  \u2796 NEUTRAL \u2014 same coverage. The prompt already hit its ceiling;")
-        print(f"     improvements helped individual targeted queries more than the")
-        print(f"     broad comprehensive prompt.")
+    print(f"  VERDICT (in-scope only): {first_in_scope_found}/{len(COMP_PROMPT_DIRECT)} \u2192 {last_in_scope_found}/{len(COMP_PROMPT_DIRECT)}")
+    print(f"  Bonus (Curator-added edge cases found): {len(out_scope_found)}")
+    if delta_scope > 0:
+        print(f"  \u2705 YES \u2014 UC semantic improvements INDIRECTLY improved coverage by +{delta_scope} metrics.")
+        print(f"     The semantic layer helps even when the Supervisor decomposes one broad question.")
+    elif delta_scope == 0:
+        print(f"  \u2796 NEUTRAL \u2014 same in-scope coverage. Improvements helped targeted queries")
+        print(f"     more than the broad comprehensive prompt.")
     else:
-        print(f"  \u26a0\ufe0f REGRESSED by {abs(delta)} metrics. Agent non-determinism is likely")
-        print(f"     the cause \u2014 the Supervisor routes differently each call. Rerun to confirm.")
+        print(f"  \u26a0\ufe0f REGRESSED by {abs(delta_scope)} in-scope metrics. Agent non-determinism likely.")
 
     print(f"\n  KEY INSIGHT:")
-    print(f"  The 45-metric test sends 45 TARGETED questions to domain agents.")
-    print(f"  The comprehensive prompt sends 1 BROAD question to the Supervisor.")
-    print(f"  If coverage improves here, the semantic layer makes the Supervisor's")
-    print(f"  ROUTING and SQL more reliable \u2014 not just individual agent responses.")
-    print(f"  Consistently missing metrics are prompt-coverage gaps (the Supervisor")
-    print(f"  didn't ask about them), not accuracy failures.")
+    print(f"  Only {len(COMP_PROMPT_DIRECT)} of 45 tests come directly from the CFO prompt.")
+    print(f"  The other {45 - len(COMP_PROMPT_DIRECT)} are Curator-added edge cases that need targeted questions.")
+    print(f"  Judging the Supervisor on all 45 inflates the 'missing' count unfairly.")
+    print(f"  The correct denominator is {len(COMP_PROMPT_DIRECT)}, not 45.")
 
 print(f"\n{'='*90}")
 
@@ -6486,39 +7021,103 @@ print(f"\n{'='*90}")
 # MAGIC
 # MAGIC ### Evaluation System (BUILT)
 # MAGIC
-# MAGIC The notebook now includes a full **provenance and evaluation system** that answers: HOW did the agent arrive at each answer, and can we depend on it?
+# MAGIC The notebook includes a full **provenance and evaluation system** answering: HOW did the agent arrive at each answer, and can we depend on it?
 # MAGIC
-# MAGIC **Per-test output** (in `test_all_metrics`):
-# MAGIC * Agent SQL — the exact SQL the agent generated
-# MAGIC * GT Reference SQL — the ground truth SQL for comparison
-# MAGIC * Agent narration — the natural language response
-# MAGIC * UC Feature detection — which UC feature the agent used (Metric View, Column Comment, SQL Function, etc.)
-# MAGIC * Reasoning Confidence — dynamically derived from provenance tier: DETERMINISTIC (governed asset, repeatable), HEURISTIC (guided by comments/examples), BASELINE (raw table, may vary), GUESSED (agent invented the answer)
+# MAGIC **Per-test output** (in `test_all_metrics`, cell 7):
+# MAGIC * **Agent SQL** — the full SQL the agent generated (no truncation)
+# MAGIC * **GT Reference SQL** — the ground truth SQL for comparison (no truncation)
+# MAGIC * **Agent Narration** — the full natural language response (no truncation)
+# MAGIC * **Query Result Rows** — up to 10 rows with all columns
+# MAGIC * **Provenance & Evaluator Assessment** — structured block showing:
+# MAGIC   * **Verdict**: PASS/FAIL with ground truth and found value
+# MAGIC   * **UC Feature**: which governed asset the agent used (or raw table if none)
+# MAGIC   * **Provenance**: explanation of how the detection was made
+# MAGIC   * **Confidence**: dynamically derived label (see below)
+# MAGIC   * **Assessment**: human-readable explanation of what the confidence label means
+# MAGIC   * **Claimed Fix**: which iteration was expected to fix this test
 # MAGIC
-# MAGIC **Provenance analysis** (after each iteration's visual cell):
-# MAGIC * Parses agent SQL to detect which UC feature was used: Metric View (Iter 2), Column Comment (Iter 1), SQL Function (Iter 3), Reference Table (Iter 3), or raw base table (Baseline)
-# MAGIC * Reasoning Confidence derived automatically from the provenance tier — no static pre-coded dict needed
-# MAGIC * Visual dashboard shows heatmap of PASS/FAIL across iterations plus confidence distribution chart
-# MAGIC * Tests that pass at baseline but match an iteration's SQL pattern before that iteration ran are labeled "Guessed" (e.g. "Guessed (Iter 1)")
+# MAGIC ### Reasoning Confidence Labels
+# MAGIC
+# MAGIC Every test carries a **Reasoning Confidence** label derived dynamically from provenance tier — nothing is hardcoded.
+# MAGIC
+# MAGIC | Confidence | What It Means | Provenance Tiers |
+# MAGIC | --- | --- | --- |
+# MAGIC | **DETERMINISTIC** | Agent steered by a governed UC asset — answer cannot drift | Iter 2 (Metric Views), Iter 3 (SQL Functions, Reference Tables) |
+# MAGIC | **HEURISTIC** | Agent guided by metadata — likely repeatable | Iter 1 (Column Comments, Example SQL, Benchmarks) |
+# MAGIC | **INFERRED** | Agent figured it out from raw column names — correct but ungoverned, fragile to rephrasing | Raw Table (no UC feature used) |
+# MAGIC | **GUESSED** | Agent invented thresholds — unreliable | No UC feature available |
+# MAGIC
+# MAGIC **Key insight**: Accuracy alone doesn’t prove governance. A lucky guess scores the same as a governed answer. Confidence proves the answer is **reliably correct**, not just correct today.
+# MAGIC
+# MAGIC ### SQL Pattern Stability (Deep Reliability Analysis, cell 26)
+# MAGIC
+# MAGIC SQL **should change** between iterations — that’s the demo improving the agent. What matters is whether it **stabilizes**.
+# MAGIC
+# MAGIC | Category | Icon | Meaning |
+# MAGIC | --- | --- | --- |
+# MAGIC | **STABLE** | 🟢 | Same SQL across ALL iterations |
+# MAGIC | **STABILIZED** | 🔵 | Changed early (improvement), locked in last 2 iterations |
+# MAGIC | **CONVERGING** | 🟡 | Same table + aggregation approach, WHERE details still differ |
+# MAGIC | **VOLATILE** | 🔴 | SQL still changing in the latest iteration |
+# MAGIC
+# MAGIC SQL signature normalization: collapses whitespace, sorts AND conditions alphabetically, strips `DATE` keyword from date literals.
+# MAGIC
+# MAGIC ### Robustness: Reliability vs Dependability (cell 27)
+# MAGIC
+# MAGIC | Metric | Question It Answers |
+# MAGIC | --- | --- |
+# MAGIC | **Reliability** | Did the agent get the **right answer**? (accuracy across rephrased variations) |
+# MAGIC | **Dependability** | Did the agent use the **same SQL approach**? (consistency across rephrased variations) |
+# MAGIC
+# MAGIC Dependability scored at 4 levels: 100% (Identical SQL), 85% (Same structure, different filters), 60% (Mixed approaches), 33% (Genuinely different SQL). **Functional Equivalence** flag marks tests where SQL differs but all variations still produce the correct answer.
 # MAGIC
 # MAGIC ### Key Finding: Genie Agents Cannot Access UC Pages
 # MAGIC
 # MAGIC * **Genie One** (standalone chat): CAN read UC Pages. Returns correct answers with citations.
-# MAGIC * **Genie Agents** (API / Supervisor): CANNOT read UC Pages. Agent stated: "I don't have direct access to those pages."
+# MAGIC * **Genie Agents** (API / Supervisor): CANNOT read UC Pages. Agent stated: *"I don’t have direct access to those pages."*
 # MAGIC * **Workaround**: SQL Functions encode the same thresholds. When added to agent data sources, the agent calls these functions.
-# MAGIC * UC Pages remain valuable as human-facing governance documentation.
+# MAGIC * UC Pages remain valuable as human-facing governance documentation on the Discover page.
 # MAGIC
-# MAGIC ### Baseline Non-Determinism (30-31/45)
+# MAGIC ### Supervisor Agent Configuration
 # MAGIC
-# MAGIC At baseline, the agent answers are non-deterministic — the same question may produce different SQL across runs. The count varies between 30-31 PASS out of 45. This is expected: the agent guesses from column/table names, and those guesses are probabilistic.
+# MAGIC * **10 registered tools**: 5 Genie Agent sub-agents + 5 UC SQL Functions
+# MAGIC * **SQL Functions** return DEFINITIONS (concept, source_table, threshold_columns, conditions, definition) — not data. Agent must write its own SQL.
+# MAGIC * **Provenance instructions** patched onto all 5 sub-agents asking them to state which UC feature they used.
 # MAGIC
-# MAGIC The provenance analysis shows this clearly: most baseline passes are classified as BASELINE confidence ("raw table, may vary"). The 5 P-tests (P01-P05) use multi-condition rules that are truly unguessable — no LLM can infer "delay_days >= 5 AND total_weight_kg > 800" from column names alone. These tests definitively prove whether the agent used the SQL function or guessed.
+# MAGIC ### Baseline Non-Determinism (29/45)
 # MAGIC
-# MAGIC ### Remaining Work
+# MAGIC At baseline, agent answers are non-deterministic — the same question may produce different SQL across runs. Approximately 29/45 PASS at baseline. Most baseline passes are classified as INFERRED confidence.
 # MAGIC
-# MAGIC * **A02/A03 Non-Determinism**: Logistics agent intermittently bypasses the metric view and queries the base `shipments` table with `CURRENT_DATE()` or extra filters. Fix: add Example SQL Queries to the logistics agent in Iteration 1 (cell 9) steering to the metric view.
-# MAGIC * **Full E2E validation**: Run all cells 3→22 in sequence with the latest fixes (retry on 429, full test output, provenance probes) to get clean progression numbers.
-# MAGIC * **Robustness testing**: Rephrase baseline questions (e.g., "delayed" instead of "late") to prove the agent was guessing from column names.
+# MAGIC The 5 P-tests (P01–P05) use multi-condition rules that are truly unguessable — no LLM can infer "delay_days >= 5 AND total_weight_kg > 800" from column names alone. These tests definitively prove whether the agent used the SQL function or guessed.
+# MAGIC
+# MAGIC ### Iteration Results
+# MAGIC
+# MAGIC | Stage | PASS | Confidence Profile |
+# MAGIC | --- | --- | --- |
+# MAGIC | Baseline | ~29/45 | Mostly INFERRED |
+# MAGIC | After Iteration 1 | ~37/45 | +HEURISTIC (comments/examples) |
+# MAGIC | After Iteration 2 | ~40/45 | +DETERMINISTIC (metric views) |
+# MAGIC | After Iteration 3 | **45/45** | Mostly DETERMINISTIC (SQL functions, reference tables) |
+# MAGIC
+# MAGIC ### Bug Fixes Applied This Session
+# MAGIC
+# MAGIC * **`iter_actually_ran` substring check**: `'iter 3'` was not matching `'after iteration 3'` — all tiers were falsely relabeled as "Guessed". Fixed in cells 8, 11, 14, 22 by adding `'iteration X'` as primary substring match.
+# MAGIC * **`extract_sql_signature` whitespace bug**: Newlines in WHERE clause created false mismatches. Fixed by collapsing all whitespace to single spaces.
+# MAGIC * **`extract_sql_signature` clause order bug**: `WHERE a AND b` ≠ `WHERE b AND a`. Fixed by sorting AND conditions alphabetically.
+# MAGIC * **`extract_sql_signature` DATE literal bug**: `DATE '2026-08-01'` ≠ `'2026-08-01'`. Fixed by normalizing `DATE` keyword.
+# MAGIC * **Narration truncation removed**: `test_all_metrics` was limiting narration to 3 lines at 120 chars/line. Now shows full narration, full SQL, full GT SQL.
+# MAGIC * **Result rows increased**: From 2 to 10 rows shown per test.
+# MAGIC * **Provenance & Evaluator Assessment**: New structured output block replacing the plain-text verdict lines.
+# MAGIC * **SQL consistency metric redesigned**: Changed from "same across all iterations" (meaningless — SQL should change) to "stabilized in last 2 iterations" with 4 categories.
+# MAGIC * **Robustness dependability scoring**: Changed from binary same/different to 4-level scoring with functional equivalence flag.
+# MAGIC
+# MAGIC ### Notebook Structure (30 cells)
+# MAGIC
+# MAGIC Every analysis cell is preceded by a markdown definitions cell:
+# MAGIC * Cell 21: **Reasoning Confidence definitions** → Cell 22: VISUAL After Iter 3
+# MAGIC * Cell 23: **Deep Reliability Analysis definitions** → Cell 24: DEEP RELIABILITY ANALYSIS
+# MAGIC * Cell 25: **Robustness Test definitions** → Cell 26: ROBUSTNESS TEST
+# MAGIC * Cell 27: **Comprehensive Prompt Benchmark definitions** → Cell 28: COMPREHENSIVE PROMPT BENCHMARK
 
 # COMMAND ----------
 

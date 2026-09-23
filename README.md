@@ -325,7 +325,7 @@ The Supervisor Agent investigates all 5 domains and produces a structured execut
 
 ---
 
-## Baseline Test Results (45-Test Assumption Tester v3)
+## Baseline Test Results (45-Test Curator Benchmarks)
 
 Before any UC Semantics features are applied, the 5 Genie Agents are tested with **45 individual questions** using **exact 2-decimal precision matching** (`round(abs(found), 2) == round(abs(expected), 2)`). No tolerance bands — either it matches or it doesn't.
 
@@ -592,9 +592,9 @@ These are NOT explicitly asked in the prompt, but appear in the agent's analysis
 
 The full test suite consists of **45 individual metric tests** organized into 9 groups (A-H, P). Each test sends a natural-language question to a specific Genie Agent and compares the returned value against a ground truth at exact 2-decimal precision.
 
-See `00_run_all` cell 6 (Assumption Tester v3) for the complete test definitions and ground truth values.
+See `00_run_all` cell 7 (Curator Benchmarks) for the complete test definitions and ground truth values.
 
-Ground truth SQL patterns are embedded in the `00_run_all` assumption tester (cell 6) and the metric view definitions in cell 10 (Iteration 2). They do not need to be maintained separately in this README.
+Ground truth SQL patterns are embedded in the `00_run_all` Curator Benchmarks (cell 7) and the metric view definitions in cell 10 (Iteration 2). They do not need to be maintained separately in this README.
 
 ---
 
@@ -867,11 +867,11 @@ If any one of those is missing, Genie can still produce plausible SQL, but not n
 
 ## Iteration Plan (00_run_all.py)
 
-The master orchestrator notebook runs **3 inline iterations** (cells 9, 12, 18-19), each adding a distinct category of UC Semantics feature. A 45-test assumption tester runs after each iteration to measure progress. After the final iteration, cells 20-23 provide deep analysis of reliability, robustness, and provenance.
+The master orchestrator notebook runs **3 inline iterations** (cells 9, 12, 18-19), each adding a distinct category of UC Semantics feature. The 45-test Curator Benchmarks suite runs after each iteration to measure progress. After the final iteration, cells 20-23 provide deep analysis of reliability, robustness, and provenance.
 
 | Stage | Cell | UC Feature Added | Targets Fixed | Score |
 |---|---|---|---|---|
-| **Baseline** | Cell 6 | None — bare tables + lean agent instructions | — | **~29-31/45 (~67%, non-deterministic)** |
+| **Baseline** | Cell 7 | None — bare tables + lean agent instructions | — | **~29-31/45 (~67%, non-deterministic)** |
 | **Iter 1** | Cell 9 | Column/table **comments** + **Example SQL Queries** + **Benchmarks** | A04, D04, D06, F02, F03, H01, H02, H03 | **~35-37/45 (~78%)** |
 | **Iter 2** | Cell 12 | 4 UC **Metric Views** (YAML) + **governed tags** + 1 **Open Knowledge** view (CoD) | E03, H05, H06, H07 | **~38-40/45 (~87%)** |
 | **Iter 3 Setup** | Cell 18 | `fiscal_targets` table + 5 **SQL Functions** + UC **Domain & Pages** (UI) | G01, G02, P01-P05 | (setup only — stops for manual step) |

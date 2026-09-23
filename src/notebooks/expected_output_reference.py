@@ -618,7 +618,7 @@ df9.display()
 
 # COMMAND ----------
 
-# DBTITLE 1,Section 10: Ground Truth Query Reference — All 40 Metrics
+# DBTITLE 1,Section 10: Ground Truth Query Reference — All 45 Metrics
 # MAGIC %md
 # MAGIC ---
 # MAGIC ## 10. Ground Truth Query Reference — All 40 Metrics
@@ -671,6 +671,11 @@ df9.display()
 # MAGIC | **H05** | 3,138,569.66 | **GT Query H05 (below)** | Cross-domain derivation |
 # MAGIC | **H06** | 14,368.63 | **GT Query H06 (below)** | Cross-domain derivation |
 # MAGIC | **H07** | 1.12 | **GT Query H07 (below)** | Cross-domain derivation |
+# MAGIC | **P01** | 176 | **GT Query P01 (below)** | `logistics_operations.shipments` |
+# MAGIC | **P02** | 77 | **GT Query P02 (below)** | `demand_analysis.sales_orders` |
+# MAGIC | **P03** | 106 | **GT Query P03 (below)** | `inventory_management.inventory_ledger` |
+# MAGIC | **P04** | 11 | **GT Query P04 (below)** | `supplier_procurement.supplier_orders` |
+# MAGIC | **P05** | 3 | **GT Query P05 (below)** | `reporting.supply_chain_risk_scorecard` |
 # MAGIC
 # MAGIC > **Bolded** query locations indicate metrics whose GT query lives in this section (below). All others reference queries already in Sections 1–9 above.
 # MAGIC
@@ -861,11 +866,11 @@ df_h05.display()
 
 # COMMAND ----------
 
-# DBTITLE 1,GT Values G01/G02: Q3 Fiscal Targets (UC Pages)
+# DBTITLE 1,GT Values G01/G02: Q3 Fiscal Targets (UC Pages + Reference Table)
 # MAGIC %md
 # MAGIC #### GT Values G01, G02: Q3 Fiscal Calendar Targets
 # MAGIC
-# MAGIC **These are the only GT values with no SQL query.** The value `95.0%` exists exclusively in **UC Page 1 (Fiscal Calendar & Targets)** created on the Discover page. No table in the catalog stores this number.
+# MAGIC The value `95.0%` is defined in **UC Page 1 (Fiscal Calendar & Targets)** on the Discover page AND stored in the **`reporting.fiscal_targets`** reference table (created in Iteration 3). Genie One reads UC Pages; Genie Agents query the fiscal_targets table. No table in the catalog stores this number.
 # MAGIC
 # MAGIC | ID | Question | GT Value | Source |
 # MAGIC | --- | --- | --- | --- |
@@ -877,14 +882,82 @@ df_h05.display()
 # MAGIC * Q3 FY2027 service-level target = 95%
 # MAGIC * Current FY = FY2027 (July 2026 – June 2027)
 # MAGIC
-# MAGIC **Iteration 3** also creates a `fiscal_targets` reference table that the Executive agent can query, but the 95% value is **governed** by the UC Page, not the table alone.
+# MAGIC **Iteration 3** creates a `fiscal_targets` reference table that the Executive agent can query. The 95% value is **governed** by the UC Page but **delivered** to Genie Agents via the reference table (proven: agents cannot read UC Pages).
 
 # COMMAND ----------
 
-# DBTITLE 1,GT Test Definitions: 40 Questions + Expected Values
+# DBTITLE 1,GT Queries P01-P05: Domain-Specific Critical Thresholds (SQL Functions)
+# GT Queries P01-P05: Domain-Specific Critical Thresholds
+# These thresholds are defined in UC Pages (for Genie One) and SQL Functions (for Genie Agents).
+# The SQL functions return ONLY the business definition — the agent must query the source table itself.
+# Below are the GT queries that verify the expected counts.
+
+CATALOG = dbutils.widgets.get("catalog_name")
+
+# P01: Logistics Risk Standards — delay_days >= 5 AND total_weight_kg > 800
+# Expected: 176
+df_p01 = spark.sql(f"""
+SELECT COUNT(*) AS flagged_shipments
+FROM {CATALOG}.logistics_operations.shipments
+WHERE ship_date >= DATE '2026-08-01' AND ship_date < DATE '2026-09-01'
+  AND delay_days >= 5 AND total_weight_kg > 800
+""")
+print("P01 (Logistics Risk Standards):")
+df_p01.display()
+
+# P02: Demand Anomaly Alert — quantity >= 8 AND unit_price < 30 AND channel = 'Online' (Western, Aug)
+# Expected: 77
+df_p02 = spark.sql(f"""
+SELECT COUNT(*) AS anomaly_orders
+FROM {CATALOG}.demand_analysis.sales_orders
+WHERE order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01'
+  AND region = 'Western'
+  AND quantity >= 8 AND unit_price < 30 AND channel = 'Online'
+""")
+print("P02 (Demand Anomaly Alert):")
+df_p02.display()
+
+# P03: Inventory Risk Classification — days_of_supply BETWEEN 1 AND 11 AND below_safety_stock_flag = true AND on_hand_qty > 0
+# Expected: 106
+df_p03 = spark.sql(f"""
+SELECT COUNT(*) AS supply_risk_positions
+FROM {CATALOG}.inventory_management.inventory_ledger
+WHERE days_of_supply BETWEEN 1 AND 11
+  AND below_safety_stock_flag = true
+  AND on_hand_qty > 0
+""")
+print("P03 (Inventory Risk Classification):")
+df_p03.display()
+
+# P04: Procurement Quality Minimum — quality_score < 75 AND lead_time_variance_days > 12
+# Expected: 11
+df_p04 = spark.sql(f"""
+SELECT COUNT(*) AS below_quality_minimum
+FROM {CATALOG}.supplier_procurement.supplier_orders
+WHERE order_date >= DATE '2026-08-01' AND order_date < DATE '2026-09-01'
+  AND quality_score < 75 AND lead_time_variance_days > 12
+""")
+print("P04 (Procurement Quality Minimum):")
+df_p04.display()
+
+# P05: Executive Disruption Threshold — composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000
+# Expected: 3
+df_p05 = spark.sql(f"""
+SELECT COUNT(*) AS critical_suppliers
+FROM {CATALOG}.reporting.supply_chain_risk_scorecard
+WHERE composite_risk_score < 55
+  AND lead_time_variance > 8
+  AND total_penalty_usd > 80000
+""")
+print("P05 (Executive Disruption Threshold):")
+df_p05.display()
+
+# COMMAND ----------
+
+# DBTITLE 1,GT Test Definitions: 45 Questions + Expected Values
 # MAGIC %md
 # MAGIC ---
-# MAGIC ### Complete Test Definitions: All 40 Questions
+# MAGIC ### Complete Test Definitions: All 45 Questions
 # MAGIC
 # MAGIC For reference, here is every test ID with the **exact question** sent to the Genie agent and the **expected value** the agent must return. These are the inputs to `00_run_all`'s Assumption Tester.
 # MAGIC
@@ -965,8 +1038,18 @@ df_h05.display()
 # MAGIC
 # MAGIC | ID | Question | Expected | Why It Fails at Baseline |
 # MAGIC | --- | --- | --- | --- |
-# MAGIC | G01 | Are we going to miss our Q3 service-level targets? | **95.0** | No SQL — value exists only in UC Pages |
-# MAGIC | G02 | What is our Q3 service-level target? | **95.0** | No SQL — value exists only in UC Pages |
+# MAGIC | G01 | Are we going to miss our Q3 service-level targets? | **95.0** | Value in UC Pages + fiscal_targets table |
+# MAGIC | G02 | What is our Q3 service-level target? | **95.0** | Value in UC Pages + fiscal_targets table |
+# MAGIC
+# MAGIC #### Group P: Critical Thresholds (agents: domain-specific, fix: SQL Functions / UC Pages)
+# MAGIC
+# MAGIC | ID | Agent | Question | Expected | Policy Rule |
+# MAGIC | --- | --- | --- | --- | --- |
+# MAGIC | P01 | `logistics` | How many shipments in August were flagged under the Logistics Risk Standards? | **176** | delay_days >= 5 AND total_weight_kg > 800 |
+# MAGIC | P02 | `demand` | How many Western region orders in August triggered a Demand Anomaly Alert? | **77** | quantity >= 8 AND unit_price < 30 AND channel = 'Online' |
+# MAGIC | P03 | `inventory` | How many inventory positions are classified as supply-risk under Inventory Standards? | **106** | days_of_supply BETWEEN 1 AND 11 AND below_safety_stock_flag = true AND on_hand_qty > 0 |
+# MAGIC | P04 | `supplier` | How many supplier orders last month fell below the Procurement Quality Minimum? | **11** | quality_score < 75 AND lead_time_variance_days > 12 |
+# MAGIC | P05 | `executive` | How many suppliers exceeded the Executive Disruption Threshold? | **3** | composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000 |
 
 # COMMAND ----------
 
@@ -1057,7 +1140,7 @@ df_h05.display()
 # MAGIC
 # MAGIC | Stage | PASS | Total | Accuracy | What Changed |
 # MAGIC | --- | --- | --- | --- | --- |
-# MAGIC | **Baseline** | ~30-31 | 45 | ~67-69% (non-deterministic) | Bare tables, no comments, no views, no tags. Agent guesses from column/table names — answers vary across runs. |
+# MAGIC | **Baseline** | 29 | 45 | 64% (non-deterministic) | Bare tables, no comments, no views, no tags. Agent guesses from column/table names — answers vary across runs. |
 # MAGIC | **After Iter 1** | ~35-37 | 45 | ~78-82% | Column comments, Example SQL Queries, Benchmarks. Steers agent to correct tables. |
 # MAGIC | **After Iter 2** | ~38-40 | 45 | ~84-89% | UC Metric Views (4), Governed Tags, Open Knowledge View (CoD). Pre-computed KPIs eliminate formula guessing. |
 # MAGIC | **After Iter 3** | 45 | 45 | 100% (fully deterministic) | `fiscal_targets` table, 5 SQL Functions, UC Domain + Pages. Every answer grounded in governed asset. |
@@ -1068,9 +1151,23 @@ df_h05.display()
 # MAGIC | --- | --- | --- |
 # MAGIC | 1 | `ALTER TABLE SET COMMENT`, `example_question_sqls` API (Genie Examples tab), `benchmarks` API (Genie Benchmarks tab) | A04, D04, D06, F02, F03, H01, H02, H03 |
 # MAGIC | 2 | `CREATE VIEW WITH METRICS LANGUAGE YAML`, `ALTER TABLE SET TAGS`, `ALTER SCHEMA SET TAGS`, Open Knowledge View | E03, H05, H06, H07 |
-# MAGIC | 3 | `fiscal_targets` table, 5 SQL Functions (`get_critical_*`), UC Domain + Pages (Discover page) | G01, G02, P01, P02, P03, P04, P05 |
+# MAGIC | 3 | `fiscal_targets` reference table, 5 SQL Functions (`get_critical_*` — definition-only, agent must query source tables), UC Domain + Pages (Discover page), Supervisor tool registration | G01, G02, P01, P02, P03, P04, P05 |
 # MAGIC
-# MAGIC **Key finding: Genie Agents CANNOT access UC Pages.** G01/G02 are fixed by the `fiscal_targets` TABLE. P01-P05 are fixed by SQL Functions. UC Pages serve as human-facing governance documentation only.
+# MAGIC **Key finding: Genie Agents CANNOT access UC Pages.** G01/G02 are fixed by the `fiscal_targets` TABLE. P01-P05 are fixed by SQL Functions (definition-only — each returns the business concept name, source table, threshold columns, and conditions; the agent must then query the source table itself to compute the answer). UC Pages serve as human-facing governance documentation and feed Genie One's ontology, but Genie Agents cannot read them.
+# MAGIC
+# MAGIC ### SQL Function Design: Definition-Only (No Pre-Computed Answers)
+# MAGIC
+# MAGIC Each `get_critical_*` function returns a single row with:
+# MAGIC
+# MAGIC | Column | Purpose |
+# MAGIC | --- | --- |
+# MAGIC | `concept` | The policy name (e.g., "Logistics Risk Standards") |
+# MAGIC | `source_table` | Which table the agent should query |
+# MAGIC | `threshold_columns` | Which columns the conditions apply to |
+# MAGIC | `conditions` | The exact WHERE clause conditions |
+# MAGIC | `definition` | Human-readable explanation + UC Page source citation |
+# MAGIC
+# MAGIC The functions do **NOT** return data or pre-computed counts. The agent must read the definition, understand the business rule, and write its own SQL query against the source table. This is a genuine test of whether the agent can interpret governed metadata — not a hardcoded shortcut.
 # MAGIC
 # MAGIC ### The Six Foundation Layers Demonstrated
 # MAGIC
@@ -1080,5 +1177,5 @@ df_h05.display()
 # MAGIC | 1. Enrich metadata | Column/table comments, tags | Iter 1: comments. Iter 2: governed tags |
 # MAGIC | 2. Model semantics | Metric Views, Domains, Pages | Iter 2: 4 MVs + CoD view. Iter 3: Domain + Pages |
 # MAGIC | 3. Curate context | Certified assets, examples, instructions | Iter 1: Example SQL + Benchmarks. Iter 2: certification tags |
-# MAGIC | 4. Evaluate & refine | Benchmark, evaluate, iterate | 40-test suite + comprehensive prompt benchmark |
+# MAGIC | 4. Evaluate & refine | Benchmark, evaluate, iterate | 45-test suite + comprehensive prompt benchmark |
 # MAGIC | 5. Continuously learn | Ontology feedback loop | Domain + Pages feed Genie's ontology |
