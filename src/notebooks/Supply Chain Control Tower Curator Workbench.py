@@ -7,7 +7,7 @@
 # MAGIC %md
 # MAGIC # Supply Chain Control Tower — Full Pipeline
 # MAGIC
-# MAGIC **One-click E2E setup**: Tears down any existing deployment, regenerates all data, creates 5 Genie Agents + Supervisor Agent, then progressively improves accuracy across **3 iterations** using **UC Semantic features** — from a non-deterministic ~67% baseline to a fully deterministic **100% (45/45)**.
+# MAGIC **One-click E2E setup**: Tears down any existing deployment, regenerates all data, creates 5 Genie Agents + Supervisor Agent, then progressively improves accuracy across **3 iterations** using **UC Semantic features** — from a non-deterministic ~62% baseline to a fully deterministic **100% (45/45)**.
 # MAGIC
 # MAGIC ### Why the data is deterministic
 # MAGIC
@@ -18,7 +18,7 @@
 # MAGIC
 # MAGIC ### Key insight: Non-determinism → Determinism
 # MAGIC
-# MAGIC At baseline, agent answers are **non-deterministic** — the same question may produce different SQL on different runs. The agent guesses table and column mappings from names, picks thresholds from general knowledge, and may change its answer if the question is rephrased. Across runs, **30-31 of 45 tests pass** (the exact count fluctuates).
+# MAGIC At baseline, agent answers are **non-deterministic** — the same question may produce different SQL on different runs. The agent guesses table and column mappings from names, picks thresholds from general knowledge, and may change its answer if the question is rephrased. In the recorded baseline run, **28 of 45 tests pass**; before the semantic layer is added, results can still drift across runs.
 # MAGIC
 # MAGIC Each iteration adds UC Semantic features that make more answers **deterministic**: the agent follows governed metadata (column comments, metric views, SQL functions) rather than guessing. By Iteration 3, all 45 tests pass consistently because every answer is grounded in a UC-governed asset.
 # MAGIC
@@ -31,25 +31,32 @@
 # MAGIC | 3 | Setup: paths, API client, evaluation engine, provenance system, LLM reasoning classifier | Python |
 # MAGIC | 4 | **Step 1**: Teardown (drop catalog, delete agents) | Python |
 # MAGIC | 5 | **Steps 2-8**: Create catalog, generate data (4 scripts), create reporting views, create Genie Agents + Supervisor | Python |
-# MAGIC | 6 | **Baseline**: 45 tests, bare schema, no UC features (~30-31/45 PASS, non-deterministic) | Python |
-# MAGIC | 7 | VISUAL: Test Results Dashboard + Provenance Probes (asks agents HOW they answered) | Python |
-# MAGIC | 8 | Iteration 1 approach (what and why) | Markdown |
-# MAGIC | 9 | **Iteration 1**: Column comments + Example SQL Queries + Benchmarks | Python |
-# MAGIC | 10 | VISUAL: After Iteration 1 + fresh provenance probes | Python |
-# MAGIC | 11 | Iteration 2 approach (what and why) | Markdown |
-# MAGIC | 12 | **Iteration 2**: UC Metric Views + Governed Tags + Open Knowledge View (CoD) | Python |
-# MAGIC | 13 | VISUAL: After Iteration 2 + fresh provenance probes | Python |
-# MAGIC | 14 | Iteration 3 approach (what and why) | Markdown |
-# MAGIC | 15 | **Pre-step**: Create `fiscal_targets` reference table | Python |
-# MAGIC | 16 | Kernel Recovery (if kernel restarts mid-session) | Python |
-# MAGIC | 17 | **Manual Step**: Create UC Domain + Pages on the Discover page | Markdown |
-# MAGIC | 18 | **Iteration 3**: fiscal_targets + SQL Functions for critical thresholds | Python |
-# MAGIC | 19 | VISUAL: After Iteration 3 (Final) + fresh provenance probes | Python |
-# MAGIC | 20 | **Final proof**: Full 45-test rerun | Python |
-# MAGIC | 21 | Comprehensive prompt benchmark approach | Markdown |
-# MAGIC | 22 | **Comprehensive prompt benchmark**: LIVE Supervisor call | Python |
-# MAGIC | 23 | Status and findings | Markdown |
-# MAGIC | 24 | Manual step: Delete UC Domain (cleanup) | Markdown |
+# MAGIC | 6 | Test suite reference: 45 questions × 5 agents | Markdown |
+# MAGIC | 7 | **Curator Benchmarks (Baseline)**: 45-test run on bare schema | Python |
+# MAGIC | 8 | VISUAL: Baseline dashboard + provenance analysis | Python |
+# MAGIC | 9 | Iteration 1 approach (what and why) | Markdown |
+# MAGIC | 10 | **Iteration 1**: Column comments + example SQL + benchmarks | Python |
+# MAGIC | 11 | VISUAL: After Iteration 1 | Python |
+# MAGIC | 12 | Iteration 2 approach (what and why) | Markdown |
+# MAGIC | 13 | **Iteration 2**: Metric views + governed assets | Python |
+# MAGIC | 14 | VISUAL: After Iteration 2 | Python |
+# MAGIC | 15 | Iteration 3 approach (what and why) | Markdown |
+# MAGIC | 16 | **Pre-step**: Create `fiscal_targets` reference table | Python |
+# MAGIC | 17 | Kernel Recovery (warm kernel / state rebuild) | Python |
+# MAGIC | 18 | **Manual Step**: Create UC Domain + Pages on the Discover page | Markdown |
+# MAGIC | 19 | **Iteration 3 setup**: register fiscal targets + SQL functions | Python |
+# MAGIC | 20 | **Iteration 3**: Full 45-test rerun | Python |
+# MAGIC | 21 | Reasoning confidence definitions | Markdown |
+# MAGIC | 22 | VISUAL: After Iteration 3 (Final) | Python |
+# MAGIC | 23 | Deep Reliability Analysis: key terms | Markdown |
+# MAGIC | 24 | DEEP RELIABILITY ANALYSIS | Python |
+# MAGIC | 25 | Robustness Test: key terms | Markdown |
+# MAGIC | 26 | ROBUSTNESS TEST | Python |
+# MAGIC | 27 | Comprehensive Prompt Benchmark: key terms | Markdown |
+# MAGIC | 28 | **Comprehensive Prompt Benchmark**: LIVE Supervisor call | Python |
+# MAGIC | 29 | Current Status and Findings | Markdown |
+# MAGIC | 30 | Supervisor Agent vs Genie One comparison report | Markdown |
+# MAGIC | 31 | Manual step: Delete UC Domain (cleanup) | Markdown |
 # MAGIC
 # MAGIC ### The 45 tests (9 groups)
 # MAGIC
@@ -69,10 +76,10 @@
 # MAGIC
 # MAGIC | Iteration | UC Features | Accuracy | What Changes |
 # MAGIC | --- | --- | --- | --- |
-# MAGIC | Baseline | Bare tables, no comments, no views | ~30-31/45 (non-deterministic) | Agent guesses from column/table names. Answers vary across runs. |
-# MAGIC | **1** | Column/Table Comments, Example SQL Queries (Genie Examples tab), Benchmarks | ~35-37/45 | Comments steer agent to correct tables. Example SQL teaches correct patterns. |
-# MAGIC | **2** | UC Metric Views (4), Governed Tags, Schema Tags, Open Knowledge View (CoD) | ~38-40/45 | Pre-computed KPIs eliminate formula ambiguity. CoD view enables cross-domain answers. |
-# MAGIC | **3** | `fiscal_targets` table, SQL Functions (5) for critical thresholds, UC Domain + Pages (governance) | **45/45 (deterministic)** | Every answer grounded in a governed asset. No guessing remains. |
+# MAGIC | Baseline | Bare tables, no comments, no views | 28/45 (non-deterministic) | Agent guesses from column/table names. Answers vary across runs. |
+# MAGIC | **1** | Column/Table Comments, Example SQL Queries (Genie Examples tab), Benchmarks | 37/45 | Comments steer agent to correct tables. Example SQL teaches correct patterns. |
+# MAGIC | **2** | UC Metric Views (4), Governed Tags, Schema Tags, Open Knowledge View (CoD) | 41/45 | Pre-computed KPIs eliminate formula ambiguity. CoD view enables cross-domain answers. |
+# MAGIC | **3** | `fiscal_targets` table, SQL Functions (5) for critical thresholds, plus UC Domain + Pages as human-facing governance | **45/45 (deterministic)** | Every final answer is grounded in a governed asset, reference table, or structured function. |
 # MAGIC
 # MAGIC ### Provenance and Evaluation System
 # MAGIC
@@ -80,9 +87,9 @@
 # MAGIC
 # MAGIC * **DETERMINISTIC** — agent cites a UC feature (comment, metric view, SQL function) or there's only one possible table/column. Answer is reliable.
 # MAGIC * **HEURISTIC** — agent picked based on column/table name similarity. Answer works but is fragile — rephrasing could break it.
-# MAGIC * **GUESS** — agent invented a threshold or admits uncertainty. Answer may change on the next run.
+# MAGIC * **GUESSED** — agent invented a threshold or admits uncertainty. Answer may change on the next run.
 # MAGIC
-# MAGIC This shows the shift from baseline (mostly HEURISTIC/GUESS) to Iter 3 (fully DETERMINISTIC).
+# MAGIC This shows the shift from baseline (mostly HEURISTIC/INFERRED) to Iter 3 (mostly DETERMINISTIC).
 # MAGIC
 # MAGIC ### Important: UC Pages vs SQL Functions
 # MAGIC
@@ -94,7 +101,7 @@
 # MAGIC
 # MAGIC ### Manual step required
 # MAGIC
-# MAGIC Before Iteration 3, create the **UC Domain and 7 Pages** on the Discover page (cell 17 has the definitions). Cell 15 creates the `fiscal_targets` table first so it's available as a Related Asset. UC Domains and Pages are UI-only — no API yet. They persist through teardown by design.
+# MAGIC Before Iteration 3, create the **UC Domain and 7 Pages** on the Discover page (cell 18 has the definitions). Cell 16 creates the `fiscal_targets` table first so it's available as a Related Asset. UC Domains and Pages are UI-only — no API yet. They persist through teardown by design.
 
 # COMMAND ----------
 
@@ -1596,7 +1603,7 @@ else:
 # MAGIC | *"Executive Disruption Threshold"* | P05 (at-risk suppliers = 3) | — | Multi-condition: risk < 55 AND LTV > 8 AND penalty > 80K. |
 # MAGIC | *(not in prompt — Curator-added traps)* | — | H01-H02 (wrong-table trap), H03-H04 (status ambiguity), F03-F05 (status filter) | H01-H02: agent picks `supplier_lead_times` instead of `supplier_orders`. H03-H04: `Fulfilled` vs `Partially_Fulfilled` distinction. F03-F05: filtered counts by order status. |
 # MAGIC
-# MAGIC **Summary**: 25 tests come directly from the prompt. 20 are Curator-added edge cases that expose fragility — agents may get the direct question right by coincidence but fail on variations that require genuine understanding.
+# MAGIC **Summary**: 27 tests come directly from the prompt. 18 are Curator-added edge cases that expose fragility — agents may get the direct question right by coincidence but fail on variations that require genuine understanding.
 # MAGIC
 # MAGIC ---
 # MAGIC
@@ -7049,7 +7056,7 @@ print(f"\n{'='*90}")
 # MAGIC
 # MAGIC **Key insight**: Accuracy alone doesn’t prove governance. A lucky guess scores the same as a governed answer. Confidence proves the answer is **reliably correct**, not just correct today.
 # MAGIC
-# MAGIC ### SQL Pattern Stability (Deep Reliability Analysis, cell 26)
+# MAGIC ### SQL Pattern Stability (Deep Reliability Analysis, cell 24)
 # MAGIC
 # MAGIC SQL **should change** between iterations — that’s the demo improving the agent. What matters is whether it **stabilizes**.
 # MAGIC
@@ -7062,7 +7069,7 @@ print(f"\n{'='*90}")
 # MAGIC
 # MAGIC SQL signature normalization: collapses whitespace, sorts AND conditions alphabetically, strips `DATE` keyword from date literals.
 # MAGIC
-# MAGIC ### Robustness: Reliability vs Dependability (cell 27)
+# MAGIC ### Robustness: Reliability vs Dependability (cell 26)
 # MAGIC
 # MAGIC | Metric | Question It Answers |
 # MAGIC | --- | --- |
@@ -7084,9 +7091,9 @@ print(f"\n{'='*90}")
 # MAGIC * **SQL Functions** return DEFINITIONS (concept, source_table, threshold_columns, conditions, definition) — not data. Agent must write its own SQL.
 # MAGIC * **Provenance instructions** patched onto all 5 sub-agents asking them to state which UC feature they used.
 # MAGIC
-# MAGIC ### Baseline Non-Determinism (29/45)
+# MAGIC ### Baseline Non-Determinism (28/45)
 # MAGIC
-# MAGIC At baseline, agent answers are non-deterministic — the same question may produce different SQL across runs. Approximately 29/45 PASS at baseline. Most baseline passes are classified as INFERRED confidence.
+# MAGIC At baseline, agent answers are non-deterministic — the same question may produce different SQL across runs. The recorded baseline run passed 28/45. Most baseline passes are classified as INFERRED confidence.
 # MAGIC
 # MAGIC The 5 P-tests (P01–P05) use multi-condition rules that are truly unguessable — no LLM can infer "delay_days >= 5 AND total_weight_kg > 800" from column names alone. These tests definitively prove whether the agent used the SQL function or guessed.
 # MAGIC
@@ -7094,30 +7101,134 @@ print(f"\n{'='*90}")
 # MAGIC
 # MAGIC | Stage | PASS | Confidence Profile |
 # MAGIC | --- | --- | --- |
-# MAGIC | Baseline | ~29/45 | Mostly INFERRED |
-# MAGIC | After Iteration 1 | ~37/45 | +HEURISTIC (comments/examples) |
-# MAGIC | After Iteration 2 | ~40/45 | +DETERMINISTIC (metric views) |
+# MAGIC | Baseline | 28/45 | Mostly INFERRED |
+# MAGIC | After Iteration 1 | 37/45 | +HEURISTIC (comments/examples) |
+# MAGIC | After Iteration 2 | 41/45 | +DETERMINISTIC (metric views) |
 # MAGIC | After Iteration 3 | **45/45** | Mostly DETERMINISTIC (SQL functions, reference tables) |
 # MAGIC
-# MAGIC ### Bug Fixes Applied This Session
-# MAGIC
-# MAGIC * **`iter_actually_ran` substring check**: `'iter 3'` was not matching `'after iteration 3'` — all tiers were falsely relabeled as "Guessed". Fixed in cells 8, 11, 14, 22 by adding `'iteration X'` as primary substring match.
-# MAGIC * **`extract_sql_signature` whitespace bug**: Newlines in WHERE clause created false mismatches. Fixed by collapsing all whitespace to single spaces.
-# MAGIC * **`extract_sql_signature` clause order bug**: `WHERE a AND b` ≠ `WHERE b AND a`. Fixed by sorting AND conditions alphabetically.
-# MAGIC * **`extract_sql_signature` DATE literal bug**: `DATE '2026-08-01'` ≠ `'2026-08-01'`. Fixed by normalizing `DATE` keyword.
-# MAGIC * **Narration truncation removed**: `test_all_metrics` was limiting narration to 3 lines at 120 chars/line. Now shows full narration, full SQL, full GT SQL.
-# MAGIC * **Result rows increased**: From 2 to 10 rows shown per test.
-# MAGIC * **Provenance & Evaluator Assessment**: New structured output block replacing the plain-text verdict lines.
-# MAGIC * **SQL consistency metric redesigned**: Changed from "same across all iterations" (meaningless — SQL should change) to "stabilized in last 2 iterations" with 4 categories.
-# MAGIC * **Robustness dependability scoring**: Changed from binary same/different to 4-level scoring with functional equivalence flag.
-# MAGIC
-# MAGIC ### Notebook Structure (30 cells)
+# MAGIC ### Notebook Structure (31 cells)
 # MAGIC
 # MAGIC Every analysis cell is preceded by a markdown definitions cell:
 # MAGIC * Cell 21: **Reasoning Confidence definitions** → Cell 22: VISUAL After Iter 3
 # MAGIC * Cell 23: **Deep Reliability Analysis definitions** → Cell 24: DEEP RELIABILITY ANALYSIS
 # MAGIC * Cell 25: **Robustness Test definitions** → Cell 26: ROBUSTNESS TEST
 # MAGIC * Cell 27: **Comprehensive Prompt Benchmark definitions** → Cell 28: COMPREHENSIVE PROMPT BENCHMARK
+# MAGIC * Cell 30: **Supervisor Agent vs Genie One** comparison report before the final cleanup step in Cell 31
+
+# COMMAND ----------
+
+# DBTITLE 1,Supervisor Agent vs Genie One: Side-by-Side Comparison Report
+# MAGIC %md
+# MAGIC ## Supervisor Agent vs Genie One: Side-by-Side Comparison Report
+# MAGIC
+# MAGIC ### Why This Test Was Conducted
+# MAGIC
+# MAGIC The central thesis of this demo is: **structured governance (SQL Functions, Metric Views, Column Comments) produces more reliable machine-consumable answers than prose governance (UC Pages)**.
+# MAGIC
+# MAGIC To prove this, we sent the **same CFO prompt** to two systems:
+# MAGIC
+# MAGIC 1. **Supervisor Agent** (this notebook's multi-agent system) — 5 Genie Agents + 5 UC SQL Functions, NO access to UC Pages
+# MAGIC 2. **Genie One** (standalone Databricks chat) — full access to UC Pages, Knowledge Snippets, and the complete ontology
+# MAGIC
+# MAGIC Both received identical data (same catalog, same tables, same deterministic dataset). The only difference is HOW they access governance metadata:
+# MAGIC * The Supervisor calls `get_critical_*()` SQL Functions that return structured 5-column definitions
+# MAGIC * Genie One reads UC Pages on the Discover page and interprets the prose
+# MAGIC
+# MAGIC If structured governance outperforms prose governance for machine consumption, the Supervisor should match or beat Genie One on metrics that require governed definitions — especially the P-tests (multi-condition policy thresholds that cannot be guessed from column names).
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### Metrics That Match Exactly (Both Got It Right)
+# MAGIC
+# MAGIC | Metric | Supervisor | Genie One | GT | Verdict |
+# MAGIC | --- | --- | --- | --- | --- |
+# MAGIC | Aug Revenue (B01) | $3,341,063 | $3,341,063 | 3341062.58 | Both correct |
+# MAGIC | Jul Revenue (B02) | $4,581,393 | $4,581,393 | 4581392.70 | Both correct |
+# MAGIC | Revenue Change $ (B03) | -$1,240,330 | -$1,240,330 | -1240330.12 | Both correct |
+# MAGIC | Revenue Change % (B04) | -27.07% | -27.07% | -27.07 | Both correct |
+# MAGIC | Product Family #1 decline (F06) | Home Goods -$349,063 | Home Goods -$349,063 | 349062.88 | Both correct |
+# MAGIC | OTD Rate (A01) | 5.43% | 5.43% | 5.43 | Both correct |
+# MAGIC | Avg Delay Days (A03) | 2.94 | 2.94 | 2.94 | Both correct |
+# MAGIC | Total Shipments (A04) | 1,086 | 1,086 | 1086 | Both correct |
+# MAGIC | Late Shipments (A05) | 1,027 | 1,027 | 1027 | Both correct |
+# MAGIC | Below Safety Stock (C01) | 109 | 109 | 109 | Both correct |
+# MAGIC | SKUs Below SS (C02) | 61 | 61 | 61 | Both correct |
+# MAGIC | Avg DoS (C05) | 0.96 | 0.96 | 0.96 | Both correct |
+# MAGIC | Stockout SKUs (C04) | 33 | 33 | 33 | Both correct |
+# MAGIC | Vendor Late % (D03) | 75% | 75% | 75.00 | Both correct |
+# MAGIC | Late POs / Total POs (D01, D02) | 36/48 | 36/48 | 36, 48 | Both correct |
+# MAGIC | Avg Lead Time Variance (D04) | 8.69 days | 8.69 days | 8.69 | Both correct |
+# MAGIC | CoD Western Total (E03) | $3,757,298 | $3,757,298 | 3757298.31 | Both correct |
+# MAGIC | CoD Components (all 4) | Identical | Identical | All match | Both correct |
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### Metrics Where They Differ
+# MAGIC
+# MAGIC | Metric | Supervisor | Genie One | GT | Who's Right? |
+# MAGIC | --- | --- | --- | --- | --- |
+# MAGIC | **Fill Rate (E01)** | 90.91% | **80.70%** | 80.70 | Genie One. Supervisor's inventory agent returned a raw ratio, not the governed `service_level_pct` from executive KPIs |
+# MAGIC | **SLA Penalties (E02)** | **$0** | **$1,185,043** | 1185043.10 | Genie One. Supervisor's supplier agent couldn't find the penalty total |
+# MAGIC | **Q3 Target (G02)** | **95.0%** | 92.0% | 95.0 | Supervisor. Genie One showed Q1 FY2027 (Jul-Sep) targets instead of fiscal Q3 (Jan-Mar) |
+# MAGIC | **Disruption/Revenue Ratio (H07)** | Not surfaced | **1.12** | 1.12 | Genie One surfaced it; Supervisor didn't |
+# MAGIC | **Wasted Freight (A06)** (in logistics section) | Not surfaced | **$2,484,986** | 2484985.57 | Genie One included it in logistics; Supervisor only showed it in CoD breakdown |
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### The Critical Finding: P-Tests (Policy Thresholds)
+# MAGIC
+# MAGIC This is where the demo's thesis is proven or disproven. The Supervisor has SQL Functions; Genie One has UC Pages.
+# MAGIC
+# MAGIC | Policy Standard | Supervisor Answer | Supervisor Threshold Used | Genie One Answer | Genie One Threshold Used | GT | Winner |
+# MAGIC | --- | --- | --- | --- | --- | --- | --- |
+# MAGIC | **P01: Logistics Risk** | **176** | `delay_days >= 5 AND weight > 800` | 402 | `delay_days > 3` | **176** | Supervisor |
+# MAGIC | **P02: Demand Anomaly** | **77** | `qty >= 8 AND price < 30 AND channel='Online'` | **0** | `forecast_accuracy_pct < 85%` | **77** | Supervisor |
+# MAGIC | **P03: Inventory Risk** | 27 | Correct conditions, added Western filter | 180 | `days_of_supply < 14` (simplified) | **106** | Neither |
+# MAGIC | **P04: Procurement Quality** | **11** | `score < 75 AND ltv > 12` | 8 | `quality_score < 70` (wrong cutoff) | **11** | Supervisor |
+# MAGIC | **P05: Exec Disruption** | **3 suppliers** | `risk < 55 AND ltv > 8 AND penalty > 80K` | 1 region | `late_shipment_count > 500` | **3** | Supervisor |
+# MAGIC
+# MAGIC **P-Test Score: Supervisor 4/5, Genie One 0/5.**
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### How Genie One Misinterpreted UC Pages
+# MAGIC
+# MAGIC Genie One CAN read UC Pages — it cites them, links to them, and attempts to use them. But **reading prose ≠ applying structured conditions correctly**. On every P-test, Genie One misinterpreted the UC Page in a different way:
+# MAGIC
+# MAGIC | P-Test | Misinterpretation |
+# MAGIC | --- | --- |
+# MAGIC | **P01** | Simplified the threshold — dropped the weight condition, softened the delay cutoff (>3 instead of >=5) |
+# MAGIC | **P02** | Confused the entire metric concept — used forecast accuracy instead of order anomaly conditions |
+# MAGIC | **P03** | Simplified to a single-condition threshold (days\_of\_supply < 14 instead of 3-condition rule) |
+# MAGIC | **P04** | Used a different cutoff value (quality < 70 instead of < 75) and dropped the second condition |
+# MAGIC | **P05** | Changed the entity type (regions instead of suppliers) and invented a completely different condition |
+# MAGIC
+# MAGIC Meanwhile, the Supervisor called `get_critical_*()`, received the exact structured conditions, and applied them correctly 4 out of 5 times. The one miss (P03=27 instead of 106) was because the Supervisor added a Western region filter from context — the conditions themselves were correct.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### Summary Scorecard
+# MAGIC
+# MAGIC | Category | Supervisor | Genie One |
+# MAGIC | --- | --- | --- |
+# MAGIC | Revenue metrics (B01-B04) | 4/4 | 4/4 |
+# MAGIC | Logistics metrics (A01,A03-A05) | 4/4 | 4/4 + extras |
+# MAGIC | Inventory metrics (C01-C05) | 4/5 (fill rate wrong) | 5/5 |
+# MAGIC | Supplier metrics (D01-D04, E02) | 4/5 (penalties=$0) | 5/5 |
+# MAGIC | CoD (E03) | 1/1 | 1/1 + ratio |
+# MAGIC | Q3 Target (G01-G02) | 2/2 | 0/2 (wrong quarter) |
+# MAGIC | **P-tests (P01-P05)** | **4/5** | **0/5** |
+# MAGIC | **Presentation quality** | Tables, clean structure | Cards, visualizations, UC Page links, knowledge snippets |
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### Conclusion
+# MAGIC
+# MAGIC **Genie One produces a prettier, richer report** with embedded links, knowledge snippet citations, and visualizations. For general metrics that live directly in well-named columns, both systems perform equally.
+# MAGIC
+# MAGIC **But on the metrics that require precise governed definitions (P-tests), Genie One fails 5 for 5 while the Supervisor nails 4 of 5.** Prose governance (UC Pages) is excellent for human consumption but unreliable for machine consumption — the LLM simplifies multi-condition rules, confuses metric concepts, changes entity types, and invents different thresholds.
+# MAGIC
+# MAGIC **Structured governance (SQL Functions) beats prose governance (UC Pages) for machine consumption.** This is the core finding of the entire demo: the semantic layer must be machine-readable, not just human-readable, to deliver deterministic answers from AI agents.
 
 # COMMAND ----------
 
