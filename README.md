@@ -176,6 +176,54 @@ The practical rule: **build one domain at a time, one layer at a time.** This wo
 
 > **Note on images**: The two reference images above are from [Databricks UC Semantics documentation](https://docs.databricks.com/en/uc-semantics/index.html).
 
+### Why Ontology Snippets Are a Massive Token Cost Reduction
+
+A critical but often overlooked advantage of the UC Semantics approach is **token economics**. Consider the two fundamental architectures for giving an AI agent business context:
+
+#### Architecture A — Runtime Context Injection (Naïve)
+
+Every time an agent receives a question, stuff the full business glossary, metric definitions, FAQ, policy documents, and domain context into the prompt. If your enterprise glossary is 15,000 tokens and you make 500 agent calls per day across 5 domains, that's **7.5M tokens/day** just for context — before the agent even reads the question or generates SQL.
+
+| Component | Tokens per call | Calls/day | Daily token cost |
+| --- | --- | --- | --- |
+| Business glossary | ~8,000 | 500 | 4,000,000 |
+| Metric definitions | ~3,000 | 500 | 1,500,000 |
+| Policy thresholds | ~2,000 | 500 | 1,000,000 |
+| Domain FAQ | ~2,000 | 500 | 1,000,000 |
+| **Total context overhead** | **~15,000** | **500** | **7,500,000** |
+
+With a Supervisor Agent calling 3–5 sub-agents per question, the multiplier compounds: each sub-agent call independently consumes the full context. A single executive question touching all 5 domains could burn 75,000+ tokens on context alone.
+
+#### Architecture B — UC Semantics + Ontology Snippets (This Demo)
+
+Genie and Genie Agents consume UC Semantics metadata **once during ontology indexing** — column comments, table descriptions, UC Page definitions, metric view schemas, governed tags, and synonyms are all pre-processed into the **Genie Ontology**. At query time, the ontology performs **selective retrieval**: only the relevant snippet (a few sentences matching the question's domain and intent) is injected into the LLM context. The full glossary is never sent.
+
+| Component | Tokens per call | Calls/day | Daily token cost |
+| --- | --- | --- | --- |
+| Ontology snippet (selective) | ~200–500 | 500 | 100,000–250,000 |
+| Column/table metadata (cached) | ~100–300 | 500 | 50,000–150,000 |
+| **Total context overhead** | **~300–800** | **500** | **150,000–400,000** |
+
+**Token reduction: 19–50× per call.** At scale (thousands of daily queries across multiple agents), this translates to significant cost savings — potentially tens of thousands of dollars per month in LLM inference costs.
+
+#### How This Works in Practice (This Demo's Example)
+
+* **Without UC Semantics**: To answer *"How many shipments were flagged under Logistics Risk Standards?"*, the agent would need the entire policy document (~500 tokens defining all 5 threshold policies) injected into every logistics call, plus the fiscal calendar (~300 tokens), plus the cross-domain metric definitions (~400 tokens) — just in case the question touches those concepts. Total: ~1,200 tokens of context per call.
+* **With UC Semantics**: The ontology matches the question to the `Logistics Risk Standards` Page and the `get_critical_delay_shipments` SQL Function. Only the relevant snippet (~80 tokens: *"delay_days >= 5 AND total_weight_kg > 800"*) reaches the LLM. The fiscal calendar, supplier quality thresholds, and inventory risk definitions are never loaded.
+
+#### The Compounding Effect for Supervisor Agents
+
+A Supervisor Agent that orchestrates 5 sub-agents multiplies the savings. Under Architecture A, each sub-agent call carries the full context (5 × 15,000 = 75,000 tokens). Under Architecture B, each sub-agent receives only its domain-relevant snippet (5 × 400 = 2,000 tokens). The Supervisor's own orchestration prompt stays lean because it delegates domain knowledge to the ontology rather than carrying it in instructions.
+
+#### The Governance–Economics Connection
+
+UC Semantics doesn't just improve accuracy — it fundamentally changes the cost structure of AI agents at scale. The semantic layer is consumed once, indexed once, and retrieved selectively. This is why **enterprise governance and enterprise token economics are the same problem**: the more your metadata is structured and pre-indexed, the less you pay per query. Organizations that invest in UC Semantics (column comments, metric views, UC Pages, governed tags) get two returns on the same investment:
+
+1. **Accuracy**: Agents produce correct, deterministic answers grounded in governed definitions
+2. **Cost**: Each query consumes only the relevant semantic context, not the entire knowledge base
+
+The demo's progression from 28/45 (62%) to 45/45 (100%) isn't just an accuracy story — it's also a token efficiency story. Every UC feature we add is a snippet the ontology can selectively retrieve, replacing the need to inject the full context document on every call.
+
 ### UC Semantic Features Actually Used in This Demo
 
 The table below lists every UC semantic layer feature this demo uses to fix Genie agent accuracy, grouped by iteration. This is the complete set — no other mechanisms (prompt hacks, fine-tuning, custom models) are involved. Every fix is a standard Unity Catalog or Genie API capability.
