@@ -101,13 +101,13 @@
 # MAGIC
 # MAGIC ### Manual step required
 # MAGIC
-# MAGIC Before Iteration 3, create the **UC Domain and 7 Pages** on the Discover page (cell 18 has the definitions). Cell 16 creates the `fiscal_targets` table first so it's available as a Related Asset. UC Domains and Pages are UI-only — no API yet. They persist through teardown by design.
+# MAGIC Before Iteration 3, create **6 UC Domains and 7 Pages** on the Discover page (cell 18 has the definitions): 1 overall domain (`Supply Chain Operations` with all 5 schemas) + 5 domain-specific domains, each with its policy Page. Cell 16 creates the `fiscal_targets` table first so it's available as a Related Asset. UC Domains and Pages are UI-only — no API yet. They persist through teardown by design.
 
 # COMMAND ----------
 
 # DBTITLE 1,Parameters
-dbutils.widgets.text("catalog_name", "", "Catalog Name")
-dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID")
+dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
+dbutils.widgets.text("warehouse_id", "bf50738cf2819197", "SQL Warehouse ID")
 dbutils.widgets.dropdown("run_mode", "full", ["full", "skip_teardown", "iterations_only"], "Run Mode")
 
 CATALOG = dbutils.widgets.get("catalog_name")
@@ -1536,7 +1536,7 @@ if RUN_MODE != "iterations_only":
     print("\n✓ Teardown complete — catalog and agents removed")
     print("  DROP CATALOG CASCADE removes: all tables, views, metric views, tags")
     print("  Agent deletion removes: all instruction modifications, certified queries")
-    print("  Persists (by design): UC Domain 'Supply Chain Operations' + Pages (governance layer)")
+    print("  Persists (by design): 6 UC Domains + 7 Pages (governance layer)")
 else:
     print(f"⏭ Skipping teardown (run_mode=iterations_only — agents must already exist)")
 
@@ -7191,19 +7191,31 @@ print(f"\n{'='*90}")
 # MAGIC
 # MAGIC ---
 # MAGIC
-# MAGIC ### How Genie One Misinterpreted UC Pages
+# MAGIC ### Root Cause: The UC Pages Themselves Had Wrong Definitions
 # MAGIC
-# MAGIC Genie One CAN read UC Pages — it cites them, links to them, and attempts to use them. But **reading prose ≠ applying structured conditions correctly**. On every P-test, Genie One misinterpreted the UC Page in a different way:
+# MAGIC Post-mortem inspection of the actual UC Pages on the Discover page revealed that **Genie One did NOT misinterpret the Pages — it applied them faithfully**. The Pages themselves contained different (incorrect) definitions than the SQL Functions:
 # MAGIC
-# MAGIC | P-Test | Misinterpretation |
-# MAGIC | --- | --- |
-# MAGIC | **P01** | Simplified the threshold — dropped the weight condition, softened the delay cutoff (>3 instead of >=5) |
-# MAGIC | **P02** | Confused the entire metric concept — used forecast accuracy instead of order anomaly conditions |
-# MAGIC | **P03** | Simplified to a single-condition threshold (days\_of\_supply < 14 instead of 3-condition rule) |
-# MAGIC | **P04** | Used a different cutoff value (quality < 70 instead of < 75) and dropped the second condition |
-# MAGIC | **P05** | Changed the entity type (regions instead of suppliers) and invented a completely different condition |
+# MAGIC | P-Test | UC Page Definition (what Genie One read) | SQL Function Definition (what Supervisor called) | GT |
+# MAGIC | --- | --- | --- | --- |
+# MAGIC | **P01** | `delay_days > 3` (single condition) | `delay_days >= 5 AND total_weight_kg > 800` (two conditions) | 176 |
+# MAGIC | **P02** | `forecast_accuracy_pct < 85` (entirely different metric!) | `quantity >= 8 AND unit_price < 30 AND channel='Online'` | 77 |
+# MAGIC | **P03** | `days_of_supply < 14` (single condition; Page even says "Do NOT use below_safety_stock_flag") | `DoS BETWEEN 1 AND 11 AND below_safety_stock_flag = true AND on_hand_qty > 0` | 106 |
+# MAGIC | **P04** | `quality_score < 70` (wrong cutoff, single condition) | `quality_score < 75 AND lead_time_variance_days > 12` | 11 |
+# MAGIC | **P05** | `late_shipment_count > 500` on **regions** from `cost_of_disruption_by_region` | `composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000` on **suppliers** from `supply_chain_risk_scorecard` | 3 |
 # MAGIC
-# MAGIC Meanwhile, the Supervisor called `get_critical_*()`, received the exact structured conditions, and applied them correctly 4 out of 5 times. The one miss (P03=27 instead of 106) was because the Supervisor added a Western region filter from context — the conditions themselves were correct.
+# MAGIC Genie One executed each Page’s definition correctly — it got the wrong answer because the governance source itself was wrong. The Supervisor called the SQL Functions, which encode the correct multi-condition rules, and got 4/5 right.
+# MAGIC
+# MAGIC ### Why This Happened: UC Pages Are Manually Authored, SQL Functions Are Code-Defined
+# MAGIC
+# MAGIC UC Pages are created through the Discover UI — a human types the definition into a text field. There is:
+# MAGIC * No validation that the definition matches the underlying data
+# MAGIC * No test suite that catches a wrong threshold
+# MAGIC * No version control or diff review
+# MAGIC * No way to programmatically verify the Page content matches the SQL Function
+# MAGIC
+# MAGIC SQL Functions are defined in code (cell 19), deployed via `CREATE FUNCTION`, and tested by the 45-test harness. If the function returns the wrong definition, the test suite catches it immediately.
+# MAGIC
+# MAGIC The 5 UC Pages drifted from the intended rules because they were authored manually without the same verification loop. This is **not a Genie One failure — it is a governance authoring failure** that structured, testable governance (SQL Functions) prevents by design.
 # MAGIC
 # MAGIC ---
 # MAGIC
@@ -7224,11 +7236,14 @@ print(f"\n{'='*90}")
 # MAGIC
 # MAGIC ### Conclusion
 # MAGIC
-# MAGIC **Genie One produces a prettier, richer report** with embedded links, knowledge snippet citations, and visualizations. For general metrics that live directly in well-named columns, both systems perform equally.
+# MAGIC **Genie One produces a prettier, richer report** with embedded links, knowledge snippet citations, and visualizations. For general metrics that live directly in well-named columns, both systems perform equally. **Genie One faithfully executed the UC Page definitions it was given.**
 # MAGIC
-# MAGIC **But on the metrics that require precise governed definitions (P-tests), Genie One fails 5 for 5 while the Supervisor nails 4 of 5.** Prose governance (UC Pages) is excellent for human consumption but unreliable for machine consumption — the LLM simplifies multi-condition rules, confuses metric concepts, changes entity types, and invents different thresholds.
+# MAGIC **The problem was not LLM interpretation — it was governance quality.** The UC Pages had wrong definitions (manually authored, no validation). The SQL Functions had correct definitions (code-defined, test-verified). This is the deeper finding:
 # MAGIC
-# MAGIC **Structured governance (SQL Functions) beats prose governance (UC Pages) for machine consumption.** This is the core finding of the entire demo: the semantic layer must be machine-readable, not just human-readable, to deliver deterministic answers from AI agents.
+# MAGIC 1. **Prose governance (UC Pages)** is excellent for human documentation but vulnerable to authoring errors. There is no automated way to verify that a Page’s text matches the intended business rule.
+# MAGIC 2. **Structured governance (SQL Functions)** is machine-readable, testable, and version-controlled. When the function is wrong, the test suite catches it. When the Page is wrong, nobody knows until a report produces the wrong number.
+# MAGIC
+# MAGIC **The semantic layer must be testable, not just documentable.** This is the core finding of the entire demo: governance that cannot be validated will eventually drift, and the AI agent will faithfully propagate the error.
 
 # COMMAND ----------
 
@@ -7236,13 +7251,18 @@ print(f"\n{'='*90}")
 # MAGIC %md
 # MAGIC ## 🧹 MANUAL STEP: Delete UC Domain
 # MAGIC
-# MAGIC > **After reviewing results above**, delete the UC Domain to complete teardown.
+# MAGIC > **After reviewing results above**, delete all 6 UC Domains to complete teardown.
 # MAGIC
 # MAGIC ### Steps:
 # MAGIC 1. Go to the **Discover** page
-# MAGIC 2. Open domain **`Supply Chain Operations`**
-# MAGIC 3. **Delete** the domain
+# MAGIC 2. Delete each of the **6 domains**:
+# MAGIC    * `Supply Chain Operations` (overall domain — holds Fiscal Calendar & Targets + Cross-Domain Metric Definitions)
+# MAGIC    * `Logistics Operations` (holds Logistics Risk Standards)
+# MAGIC    * `Demand Analysis` (holds Demand Quality Standards)
+# MAGIC    * `Inventory Management` (holds Inventory Risk Classification)
+# MAGIC    * `Supplier Procurement` (holds Supplier Quality Standards)
+# MAGIC    * `Executive Reporting` (holds Executive Alert Thresholds)
 # MAGIC
-# MAGIC > Deleting the domain removes the domain and its 7 pages (Fiscal Calendar, Cross-Domain Metrics, and 5 domain-specific policy definitions). Schemas and tables are **not** affected — they belong to the catalog, not the domain.
+# MAGIC > Deleting the domains removes all 6 domains and their 7 pages. Schemas and tables are **not** affected — they belong to the catalog, not the domain.
 # MAGIC >
-# MAGIC > This ensures the next E2E run starts clean. The domain and pages must be **recreated fresh each time** (matching the teardown + rebuild pattern of the rest of the notebook).
+# MAGIC > This ensures the next E2E run starts clean. The domains and pages must be **recreated fresh each time** (matching the teardown + rebuild pattern of the rest of the notebook).
