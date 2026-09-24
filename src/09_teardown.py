@@ -40,15 +40,24 @@ if resp.status_code == 200:
 
 # COMMAND ----------
 
-# ---- Delete Genie Spaces ----
+# ---- Delete ALL Genie Spaces (all iterations: Baseline, Iter 1, 2, 3, Evaluator) ----
+# With per-iteration agent creation, there can be up to 21 agents:
+#   5 × Baseline + 5 × Iteration 1 + 5 × Iteration 2 + 5 × Iteration 3 + 1 Evaluator
 resp = requests.get(f"{host}/api/2.0/genie/spaces", headers=headers)
+_deleted_count = 0
 if resp.status_code == 200:
     for space in resp.json().get("spaces", []):
-        if space.get("title", "").startswith("SC - "):
+        title = space.get("title", "")
+        if title.startswith("SC - ") or ("SC" in title and any(k in title for k in ["Demand", "Inventory", "Logistics", "Supplier", "Executive", "Evaluator"])):
             sid = space["space_id"]
             del_resp = requests.delete(f"{host}/api/2.0/genie/spaces/{sid}", headers=headers)
             status = "✓" if del_resp.status_code in (200, 204) else "✗"
-            print(f"{status} Deleted space: {space['title']}")
+            print(f"{status} Deleted space: {title}")
+            if del_resp.status_code in (200, 204):
+                _deleted_count += 1
+    print(f"\n  Total deleted: {_deleted_count} Genie agents")
+else:
+    print(f"✗ Could not list spaces: {resp.status_code}")
 
 # COMMAND ----------
 

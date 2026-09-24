@@ -29,3 +29,13 @@ for schema_name, comment in schemas.items():
     print(f"✓ Schema {CATALOG}.{schema_name} created")
 
 print(f"\n✓ All schemas created in {CATALOG}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify: catalog and schemas exist
+# ── Assertions ──
+expected_schemas = ['demand_analysis', 'inventory_management', 'logistics_operations', 'supplier_procurement', 'reporting']
+actual = [r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN {CATALOG}").collect()]
+for s in expected_schemas:
+    assert s in actual, f"MISSING schema: {CATALOG}.{s}"
+print(f"✓ ASSERT PASS: catalog {CATALOG} exists with all {len(expected_schemas)} schemas")

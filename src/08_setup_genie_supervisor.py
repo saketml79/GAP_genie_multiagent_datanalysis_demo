@@ -205,11 +205,13 @@ space_ids = {}
 
 for space_name, config in spaces_config.items():
     # Create the space
+    # Append iteration label to title so each iteration set is distinguishable
+    display_title = f"{space_name} - Baseline"
     create_resp = requests.post(
         f"{host}/api/2.0/genie/spaces",
         headers=headers,
         json={
-            "title": space_name,
+            "title": display_title,
             "description": config["description"],
             "warehouse_id": WAREHOUSE_ID,
             "table_identifiers": [t["identifier"] for t in config["tables"]],
@@ -219,7 +221,7 @@ for space_name, config in spaces_config.items():
     if create_resp.status_code in (200, 201):
         space_id = create_resp.json().get("space_id") or create_resp.json().get("id")
         space_ids[space_name] = space_id
-        print(f"✓ Created: {space_name} ({space_id})")
+        print(f"✓ Created: {display_title} ({space_id})")
     else:
         print(f"✗ Failed to create {space_name}: {create_resp.status_code} - {create_resp.text[:200]}")
         continue
@@ -461,27 +463,29 @@ else:
 
 # COMMAND ----------
 
-# DBTITLE 1,Create Supervisor Agent (no evaluator tool)
+# DBTITLE 1,Create Supervisor Agent (enhanced baseline instructions)
 # ====================================================================
 # CREATE SUPERVISOR AGENT -- RAW BASELINE (minimal instructions)
 # ====================================================================
 supervisor_payload = {
     "display_name": "Supply Chain Control Tower",
     "description": "Multi-agent supply chain analysis system that coordinates demand, inventory, logistics, supplier, and executive reporting agents.",
-    "instructions": """You are a Supply Chain Control Tower Supervisor Agent. You coordinate multiple specialist agents to answer supply chain questions.
+    "instructions": """You are a Supply Chain Control Tower Supervisor Agent. You coordinate 5 specialist Genie agents to deliver comprehensive supply chain analysis.
 
-Available agents:
-- demand-analysis: Revenue and sales data
-- inventory-management: Inventory and stockout data
-- logistics-operations: Shipment and delivery data
-- supplier-risk: Supplier performance data
-- executive-reporting: KPI summaries and dashboards
+AGENTS & DOMAINS:
+- demand-analysis: Sales orders, revenue, demand forecasts, product performance, customer segmentation. Key data: sales_orders (order_date, region, total_amount, order_status, product_family), demand_forecasts, products. Ask about revenue, MoM changes, order volumes, fulfillment rates.
+- inventory-management: Inventory levels, safety stock, stockouts, days of supply, warehouse capacity. Key data: inventory_ledger (sku_id, region, on_hand_qty, below_safety_stock_flag, stockout_flag, days_of_supply). Ask about stock health, at-risk positions, SKU counts.
+- logistics-operations: Shipment performance, delivery timeliness, freight costs, carriers. Key data: shipments (ship_date, destination_region, is_late, delay_days, shipping_cost). Ask about on-time delivery rates, average delays, late shipment counts.
+- supplier-risk: Supplier performance, purchase orders, lead times, quality, SLA compliance. Key data: supplier_orders (lead_time_variance_days, is_late, quality_score), vendor_slas (penalty_amount, is_breached). Ask about vendor late rates, lead time variance, SLA penalties.
+- executive-reporting: Company-wide KPIs, regional summaries, revenue trends, fiscal targets, risk scorecards. Key data: executive_kpis, regional_performance_summary, revenue_trend, supply_chain_risk_scorecard. Ask about service levels, quarterly targets, cross-domain summaries.
 
-When answering questions:
-1. Determine which agents to query
-2. Ask each agent relevant questions
-3. Synthesize findings into a comprehensive answer
-4. Include the SQL each agent used so the user can verify"""
+ROUTING RULES:
+1. Route each metric to the MOST specific domain agent. Never ask one agent about another's domain.
+2. For cross-domain questions, query EACH relevant agent separately, then synthesize their answers.
+3. Ask agents precise, single-metric questions. Avoid compound questions to a single agent.
+4. Include the SQL each agent used so the user can verify the numbers.
+5. If any agent provides forecasted or projected values, clearly label them as projections separate from confirmed actuals.
+6. If an agent reports it cannot answer, report the gap. Do NOT fabricate data."""
 }
 
 create_resp = requests.post(
@@ -601,3 +605,28 @@ for name, sid in space_ids.items():
 print(f"\nSupervisor Agent: {supervisor_name}")
 print(f"\nTest prompt:")
 print('"Why did revenue drop in the Western Region, are we going to miss our service-level targets, and what actions should we take?"')
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify: agents and supervisor created
+# ── Assertions ──
+import requests as _rq
+
+# Verify 5 domain Genie agents exist (keys match spaces_config: "SC - Demand Analysis", etc.)
+expected_agent_keys = [
+    "SC - Demand Analysis", "SC - Inventory Management",
+    "SC - Logistics Operations", "SC - Supplier Risk", "SC - Executive Reporting"
+]
+assert len(space_ids) >= 5, f"Expected 5+ agents, got {len(space_ids)}: {list(space_ids.keys())}"
+for agent_key in expected_agent_keys:
+    assert agent_key in space_ids, f"MISSING agent: {agent_key} (have: {list(space_ids.keys())})"
+    sid = space_ids[agent_key]
+    resp = _rq.get(f"{host}/api/2.0/genie/spaces/{sid}", headers=headers)
+    assert resp.status_code == 200, f"Agent '{agent_key}' ({sid}) not reachable: {resp.status_code}"
+print(f"✓ ASSERT PASS: all 5 Genie agents exist and reachable")
+
+# Verify supervisor agent exists
+assert supervisor_name, "MISSING: supervisor_name is empty"
+resp = _rq.get(f"{host}/api/2.1/{supervisor_name}", headers=headers)
+assert resp.status_code == 200, f"Supervisor '{supervisor_name}' not reachable: {resp.status_code}"
+print(f"✓ ASSERT PASS: Supervisor agent exists and reachable ({supervisor_name})")

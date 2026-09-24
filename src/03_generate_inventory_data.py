@@ -142,3 +142,15 @@ spark.createDataFrame(movements).write.mode("overwrite").option("overwriteSchema
 print(f"✓ stock_movements: {len(movements)}")
 
 print(f"\n✓ All inventory_management tables created in {SCHEMA}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify: inventory tables exist with rows
+# ── Assertions ──
+expected = ['inventory_ledger', 'warehouse_data', 'store_inventory', 'stock_movements']
+for t in expected:
+    fqn = f"{SCHEMA}.{t}"
+    assert spark.catalog.tableExists(fqn), f"MISSING table: {fqn}"
+    cnt = spark.table(fqn).count()
+    assert cnt > 0, f"EMPTY table: {fqn} (0 rows)"
+print(f"✓ ASSERT PASS: all {len(expected)} inventory_management tables exist with data")

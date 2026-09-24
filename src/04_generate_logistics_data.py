@@ -132,3 +132,15 @@ spark.createDataFrame(transit_events).write.mode("overwrite").option("overwriteS
 print(f"✓ transit_data: {len(transit_events)}")
 
 print(f"\n✓ All logistics_operations tables created in {SCHEMA}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify: logistics tables exist with rows
+# ── Assertions ──
+expected = ['shipments', 'carriers', 'distribution_centers', 'transit_data']
+for t in expected:
+    fqn = f"{SCHEMA}.{t}"
+    assert spark.catalog.tableExists(fqn), f"MISSING table: {fqn}"
+    cnt = spark.table(fqn).count()
+    assert cnt > 0, f"EMPTY table: {fqn} (0 rows)"
+print(f"✓ ASSERT PASS: all {len(expected)} logistics_operations tables exist with data")

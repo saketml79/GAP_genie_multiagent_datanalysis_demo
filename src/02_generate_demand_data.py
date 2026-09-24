@@ -201,3 +201,15 @@ df_promos.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(
 print(f"✓ promotions: {df_promos.count()}")
 
 print(f"\n✓ All demand_analysis tables created in {SCHEMA}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify: demand tables exist with rows
+# ── Assertions ──
+expected = ['products', 'customer_segments', 'sales_orders', 'demand_forecasts', 'pos_data', 'promotions']
+for t in expected:
+    fqn = f"{SCHEMA}.{t}"
+    assert spark.catalog.tableExists(fqn), f"MISSING table: {fqn}"
+    cnt = spark.table(fqn).count()
+    assert cnt > 0, f"EMPTY table: {fqn} (0 rows)"
+print(f"✓ ASSERT PASS: all {len(expected)} demand_analysis tables exist with data")

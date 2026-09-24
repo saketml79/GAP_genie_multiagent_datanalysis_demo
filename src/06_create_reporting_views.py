@@ -163,3 +163,15 @@ SELECT
 print("✓ executive_kpis")
 
 print(f"\n✓ All reporting views created in {CATALOG}.reporting")
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify: reporting views exist with rows
+# ── Assertions ──
+expected = ['regional_performance_summary', 'revenue_trend', 'supply_chain_risk_scorecard', 'executive_kpis']
+for t in expected:
+    fqn = f"{CATALOG}.reporting.{t}"
+    assert spark.catalog.tableExists(fqn), f"MISSING view: {fqn}"
+    cnt = spark.table(fqn).count()
+    assert cnt > 0, f"EMPTY view: {fqn} (0 rows)"
+print(f"✓ ASSERT PASS: all {len(expected)} reporting views exist with data")

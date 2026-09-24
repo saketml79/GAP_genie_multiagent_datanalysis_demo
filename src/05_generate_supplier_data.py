@@ -172,3 +172,15 @@ spark.createDataFrame(procurement).write.mode("overwrite").option("overwriteSche
 print(f"✓ procurement_data: {len(procurement)}")
 
 print(f"\n✓ All supplier_procurement tables created in {SCHEMA}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify: supplier tables exist with rows
+# ── Assertions ──
+expected = ['suppliers', 'supplier_orders', 'supplier_lead_times', 'vendor_slas', 'procurement_data']
+for t in expected:
+    fqn = f"{SCHEMA}.{t}"
+    assert spark.catalog.tableExists(fqn), f"MISSING table: {fqn}"
+    cnt = spark.table(fqn).count()
+    assert cnt > 0, f"EMPTY table: {fqn} (0 rows)"
+print(f"✓ ASSERT PASS: all {len(expected)} supplier_procurement tables exist with data")

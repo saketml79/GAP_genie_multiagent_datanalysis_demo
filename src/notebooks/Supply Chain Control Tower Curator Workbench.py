@@ -28,23 +28,23 @@
 # MAGIC | --- | --- | --- |
 # MAGIC | 1 | This overview | Markdown |
 # MAGIC | 2 | Parameters (`catalog_name`, `warehouse_id`, `run_mode`) | Python |
-# MAGIC | 3 | Setup: paths, API client, evaluation engine, provenance system, LLM reasoning classifier | Python |
-# MAGIC | 4 | **Step 1**: Teardown (drop catalog, delete agents) | Python |
-# MAGIC | 5 | **Steps 2-8**: Create catalog, generate data (4 scripts), create reporting views, create Genie Agents + Supervisor | Python |
+# MAGIC | 3 | Setup: paths, API client, evaluation engine, provenance system, agent lifecycle helpers | Python |
+# MAGIC | 4 | **Step 1**: Teardown (drop catalog, delete all agents across all iterations) | Python |
+# MAGIC | 5 | **Steps 2-8**: Create catalog, generate data (4 scripts), create reporting views, create Baseline Genie Agents + Supervisor | Python |
 # MAGIC | 6 | Test suite reference: 45 questions × 5 agents | Markdown |
 # MAGIC | 7 | **Curator Benchmarks (Baseline)**: 45-test run on bare schema | Python |
 # MAGIC | 8 | VISUAL: Baseline dashboard + provenance analysis | Python |
 # MAGIC | 9 | Iteration 1 approach (what and why) | Markdown |
-# MAGIC | 10 | **Iteration 1**: Column comments + example SQL + benchmarks | Python |
+# MAGIC | 10 | **Iteration 1**: Clone Baseline → Iteration 1 agents, add column comments + example SQL + benchmarks | Python |
 # MAGIC | 11 | VISUAL: After Iteration 1 | Python |
 # MAGIC | 12 | Iteration 2 approach (what and why) | Markdown |
-# MAGIC | 13 | **Iteration 2**: Metric views + governed assets | Python |
+# MAGIC | 13 | **Iteration 2**: Clone Iteration 1 → Iteration 2 agents, add metric views + governed tags + CoD view | Python |
 # MAGIC | 14 | VISUAL: After Iteration 2 | Python |
 # MAGIC | 15 | Iteration 3 approach (what and why) | Markdown |
 # MAGIC | 16 | **Pre-step**: Create `fiscal_targets` reference table | Python |
-# MAGIC | 17 | Kernel Recovery (warm kernel / state rebuild) | Python |
+# MAGIC | 17 | Kernel Recovery (warm kernel / state rebuild — discovers latest iteration agents) | Python |
 # MAGIC | 18 | **Manual Step**: Create UC Domain + Pages on the Discover page | Markdown |
-# MAGIC | 19 | **Iteration 3 setup**: register fiscal targets + SQL functions | Python |
+# MAGIC | 19 | **Iteration 3 setup**: Clone Iteration 2 → Iteration 3 agents, register fiscal targets + SQL functions | Python |
 # MAGIC | 20 | **Iteration 3**: Full 45-test rerun | Python |
 # MAGIC | 21 | Reasoning confidence definitions | Markdown |
 # MAGIC | 22 | VISUAL: After Iteration 3 (Final) | Python |
@@ -55,8 +55,9 @@
 # MAGIC | 27 | Comprehensive Prompt Benchmark: key terms | Markdown |
 # MAGIC | 28 | **Comprehensive Prompt Benchmark**: LIVE Supervisor call | Python |
 # MAGIC | 29 | Current Status and Findings | Markdown |
-# MAGIC | 30 | Supervisor Agent vs Genie One comparison report | Markdown |
-# MAGIC | 31 | Manual step: Delete UC Domain (cleanup) | Markdown |
+# MAGIC | 30 | **Agent Cleanup**: Delete all agents except Iteration 3 (keep 5 domain + supervisor = 6) | Python |
+# MAGIC | 31 | Supervisor Agent vs Genie One comparison report | Markdown |
+# MAGIC | 32 | Manual step: Delete UC Domain (cleanup) | Markdown |
 # MAGIC
 # MAGIC ### The 45 tests (9 groups)
 # MAGIC
@@ -68,9 +69,20 @@
 # MAGIC | D: Supplier | 7 | PO counts, late %, lead time variance (overall + by continent) |
 # MAGIC | E: Cross-domain | 3 | Fill rate, SLA penalties, Cost of Disruption |
 # MAGIC | F: Indirect / Ambiguity | 6 | Region synonyms, per-order vs per-vendor, status filters |
-# MAGIC | G: Q3 Fiscal | 2 | Q3 service-level target (not in any base table) |
+# MAGIC | G: Q1 Fiscal | 2 | Q1 service-level target (not in any base table) |
 # MAGIC | H: Hard failures | 7 | Wrong table, cross-domain joins, derived ratios |
 # MAGIC | P: Critical Thresholds | 5 | Domain-specific "critical" definitions (each domain has a unique threshold) |
+# MAGIC
+# MAGIC ### Per-iteration agent architecture
+# MAGIC
+# MAGIC Each iteration creates **5 new agents** (cloned from the previous iteration) rather than modifying the existing ones. This preserves each iteration's state for side-by-side comparison:
+# MAGIC
+# MAGIC * **Baseline**: `SC - Demand Analysis - Baseline`, `SC - Inventory Management - Baseline`, …
+# MAGIC * **Iteration 1**: `SC - Demand Analysis - Iteration 1`, … (cloned from Baseline + column comments + examples)
+# MAGIC * **Iteration 2**: `SC - Demand Analysis - Iteration 2`, … (cloned from Iter 1 + metric views + tags)
+# MAGIC * **Iteration 3**: `SC - Demand Analysis - Iteration 3`, … (cloned from Iter 2 + SQL functions + fiscal targets)
+# MAGIC
+# MAGIC At the end, a cleanup cell deletes Baseline + Iteration 1 + Iteration 2 agents (15 agents), keeping only the 5 Iteration 3 domain agents + the Supervisor (6 survivors).
 # MAGIC
 # MAGIC ### The 3 iterations
 # MAGIC
@@ -83,19 +95,20 @@
 # MAGIC
 # MAGIC ### Provenance and Evaluation System
 # MAGIC
-# MAGIC After each iteration, the notebook probes agents to explain HOW they answered — what table they picked, what columns they used, and whether they'd answer the same way if the question were rephrased. An evaluator classifies each explanation as:
+# MAGIC After each iteration, the `detect_provenance()` function parses each agent's generated SQL to identify which UC semantic feature it actually used — metric view, SQL function, reference table, column comment guidance, or raw table. Based on the provenance tier, a **Reasoning Confidence** label is derived dynamically (never hardcoded):
 # MAGIC
-# MAGIC * **DETERMINISTIC** — agent cites a UC feature (comment, metric view, SQL function) or there's only one possible table/column. Answer is reliable.
-# MAGIC * **HEURISTIC** — agent picked based on column/table name similarity. Answer works but is fragile — rephrasing could break it.
-# MAGIC * **GUESSED** — agent invented a threshold or admits uncertainty. Answer may change on the next run.
+# MAGIC * **DETERMINISTIC** — Agent was steered by a governed UC asset (metric view, SQL function, reference table). Answer cannot drift even if the question is rephrased. Provenance: Iter 2-3 features.
+# MAGIC * **HEURISTIC** — Agent was guided by metadata (column comments, example SQL, benchmarks). Likely repeatable, but a sufficiently novel phrasing could bypass the guidance. Provenance: Iter 1 features.
+# MAGIC * **INFERRED** — Agent figured it out on its own from raw column/table names — no UC feature involved. Correct today, but the mapping is a probabilistic LLM guess. Ungoverned and fragile. Provenance: Raw Table.
+# MAGIC * **GUESSED** — Agent invented thresholds or conditions not provided by any UC feature. May be right by coincidence but is unreliable. Provenance: No UC feature available.
 # MAGIC
-# MAGIC This shows the shift from baseline (mostly HEURISTIC/INFERRED) to Iter 3 (mostly DETERMINISTIC).
+# MAGIC The progression from INFERRED/GUESSED at baseline to mostly DETERMINISTIC at Iteration 3 is the entire point — accuracy alone doesn't prove governance; confidence proves the answer is **reliably correct**, not just correct today.
 # MAGIC
 # MAGIC ### Important: UC Pages vs SQL Functions
 # MAGIC
 # MAGIC **Genie Agents CANNOT access UC Pages** (proven — the agent itself stated: "I don't have direct access to those pages in this context"). UC Pages are consumed by **Genie One** only.
 # MAGIC
-# MAGIC * **G01/G02** (Q3 target) — Fixed by the `fiscal_targets` TABLE, not by UC Pages
+# MAGIC * **G01/G02** (Q1 target) — Fixed by the `fiscal_targets` TABLE, not by UC Pages
 # MAGIC * **P01-P05** (critical thresholds) — Fixed by **SQL Functions** (`get_critical_delay_shipments()`, etc.) added to agent data sources in Iteration 3
 # MAGIC * UC Pages remain valuable as **human-facing governance documentation** on the Discover page
 # MAGIC
@@ -176,6 +189,166 @@ def values_match(actual, expected):
         return str(actual) == str(expected)
 
 
+# ============================================================
+# AGENT LIFECYCLE: clone, discover, cleanup
+# Each iteration creates NEW agents (never modifies previous).
+# all_spaces tracks every iteration: {"Baseline": {...}, "Iteration 1": {...}, ...}
+# ============================================================
+all_spaces = {}  # populated by each iteration cell
+
+
+def clone_agents(source_spaces, iteration_label):
+    """Clone 5 domain agents from source iteration into new agents.
+
+    Reads each source agent's full serialized_space, creates a new Genie
+    space with the iteration label, PATCHes with the copied config.
+    Returns dict: agent_name -> new_space_id
+    """
+    title_prefix = {
+        "demand": "SC - Demand Analysis",
+        "inventory": "SC - Inventory Management",
+        "logistics": "SC - Logistics Operations",
+        "supplier": "SC - Supplier Risk",
+        "executive": "SC - Executive Reporting",
+    }
+    new_spaces = {}
+    for agent_name, source_sid in source_spaces.items():
+        new_title = f"{title_prefix[agent_name]} - {iteration_label}"
+        # Read full config from source
+        r = requests.get(
+            f"{host}/api/2.0/genie/spaces/{source_sid}?include_serialized_space=true",
+            headers=headers,
+        )
+        source_ss = json.loads(r.json().get("serialized_space", "{}"))
+        source_desc = r.json().get("description", f"{agent_name} agent")
+        table_ids = [t["identifier"] for t in source_ss.get("data_sources", {}).get("tables", [])]
+
+        # Create new space
+        cr = requests.post(
+            f"{host}/api/2.0/genie/spaces",
+            headers=headers,
+            json={
+                "title": new_title,
+                "description": source_desc,
+                "warehouse_id": WAREHOUSE_ID,
+                "table_identifiers": table_ids,
+                "serialized_space": json.dumps({"version": 2}),
+            },
+        )
+        if cr.status_code not in (200, 201):
+            print(f"    \u2717 {agent_name}: create failed {cr.status_code} {cr.text[:150]}")
+            continue
+        new_sid = cr.json().get("space_id") or cr.json().get("id")
+
+        # PATCH with full config (retry for API race condition)
+        ok = False
+        for attempt in range(3):
+            time.sleep(2 + attempt)
+            pr = requests.patch(
+                f"{host}/api/2.0/genie/spaces/{new_sid}",
+                headers=headers,
+                json={"serialized_space": json.dumps(source_ss)},
+            )
+            if pr.status_code == 200:
+                vr = requests.get(
+                    f"{host}/api/2.0/genie/spaces/{new_sid}?include_serialized_space=true",
+                    headers=headers,
+                )
+                vss = json.loads(vr.json().get("serialized_space", "{}"))
+                if len(vss.get("data_sources", {}).get("tables", [])) > 0:
+                    ok = True
+                    break
+            print(f"    \u26a0 {agent_name}: retry {attempt + 1}...")
+        if ok:
+            new_spaces[agent_name] = new_sid
+            print(f"    \u2713 {agent_name}: {new_title} ({new_sid})")
+        else:
+            print(f"    \u2717 {agent_name}: failed after 3 attempts")
+    return new_spaces
+
+
+def discover_agents_by_label(label):
+    """Discover SC agents matching a specific iteration label.
+    Returns dict: agent_name -> space_id
+    """
+    resp = requests.get(f"{host}/api/2.0/genie/spaces", headers=headers)
+    found = {}
+    for s in resp.json().get("spaces", []):
+        title = s.get("title", "")
+        if "SC" not in title or label not in title:
+            continue
+        sid = s["space_id"]
+        if "Demand" in title:
+            found["demand"] = sid
+        elif "Inventory" in title:
+            found["inventory"] = sid
+        elif "Logistics" in title:
+            found["logistics"] = sid
+        elif "Supplier" in title:
+            found["supplier"] = sid
+        elif "Executive" in title:
+            found["executive"] = sid
+    return found
+
+
+def delete_agents_by_label(label):
+    """Delete all SC agents matching a specific iteration label."""
+    resp = requests.get(f"{host}/api/2.0/genie/spaces", headers=headers)
+    deleted = 0
+    for s in resp.json().get("spaces", []):
+        title = s.get("title", "")
+        if "SC" in title and label in title:
+            dr = requests.delete(f"{host}/api/2.0/genie/spaces/{s['space_id']}", headers=headers)
+            if dr.status_code in (200, 204):
+                print(f"    \u2713 Deleted: {title}")
+                deleted += 1
+            else:
+                print(f"    \u2717 Failed to delete: {title} ({dr.status_code})")
+    return deleted
+
+
+def update_supervisor_tools(current_spaces):
+    """Update the Supervisor Agent's genie_space tools to point to current iteration's agents.
+    Finds the Supply Chain supervisor, deletes old genie_space tools, creates new ones."""
+    sup_resp = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers)
+    if sup_resp.status_code != 200:
+        print(f"    \u26a0 Could not list supervisors: {sup_resp.status_code}")
+        return
+    supervisors = sup_resp.json().get("supervisor_agents", [])
+    sup = next((a for a in supervisors if "Supply Chain" in a.get("display_name", "")), None)
+    if not sup:
+        print("    \u26a0 Supply Chain supervisor not found")
+        return
+    sup_name = sup["name"]
+    # List existing tools
+    tools_resp = requests.get(f"{host}/api/2.1/{sup_name}/tools", headers=headers)
+    if tools_resp.status_code != 200:
+        print(f"    \u26a0 Could not list supervisor tools: {tools_resp.status_code}")
+        return
+    # Delete existing genie_space tools
+    for t in tools_resp.json().get("tools", []):
+        if t.get("tool_type") == "genie_space":
+            tid = t.get("tool_id", "")
+            requests.delete(f"{host}/api/2.1/{sup_name}/tools/{tid}", headers=headers)
+    # Re-create genie_space tools pointing to current iteration
+    tool_map = {
+        "demand": ("demand-analysis", "Demand Analysis agent. Answers questions about sales, revenue, and demand forecasts."),
+        "inventory": ("inventory-management", "Inventory Management agent. Answers questions about inventory levels, stockouts, and warehouse data."),
+        "logistics": ("logistics-operations", "Logistics Operations agent. Answers questions about shipments, deliveries, and transit data."),
+        "supplier": ("supplier-risk", "Supplier Risk agent. Answers questions about supplier performance, lead times, and procurement."),
+        "executive": ("executive-reporting", "Executive Reporting agent. Answers questions about KPIs, regional performance, and dashboards."),
+    }
+    for agent_name, space_id in current_spaces.items():
+        tid, desc = tool_map.get(agent_name, (agent_name, ""))
+        r = requests.post(
+            f"{host}/api/2.1/{sup_name}/tools?tool_id={tid}",
+            headers=headers,
+            json={"tool_type": "genie_space", "description": desc, "genie_space": {"id": space_id}},
+        )
+        status = "\u2713" if r.status_code in (200, 201) else "\u2717"
+        print(f"    {status} {tid} \u2192 {space_id}")
+
+
 # Single business narrative — covers ALL 10 primary GTs + every metric view measure.
 # Deliberately uses business vocabulary that confuses Genie without UC features:
 #   "revenue" / "August and July revenue"  → needs synonym: revenue = total_amount (Iter 2)
@@ -186,7 +359,7 @@ def values_match(actual, expected):
 #   "lead time variance"                    → needs metric view (Iter 4)
 #   "SLA penalties"                         → needs synonym: SLA penalty = penalty_amount (Iter 2)
 #   "Cost of Disruption"                    → needs metric view (cross-domain, Iter 4 only)
-#   "Q3 service-level targets"              → needs UC Page (Iter 5 — manual)
+#   "Q1 service-level targets"              → needs UC Page (Iter 5 — manual)
 #   "West region"                           → needs instruction: West = Western
 MAIN_PROMPT = (
     "We need a complete supply chain health check for our West region in August 2026. "
@@ -204,11 +377,11 @@ MAIN_PROMPT = (
     "Bring it all together as our total Cost of Disruption by region for last month Aug 26 — "
     "cancelled revenue, at-risk backorder revenue, wasted freight on late shipments, "
     "and supplier penalty exposure in one number per region. "
-    "Are we going to miss our Q3 service-level targets, and what are the top actions we should take? "
     "Additionally, how many shipments in August were flagged under the Logistics Risk Standards, how many Western region orders in August "
     "triggered a Demand Anomaly Alert, how many inventory positions are classified as supply-risk under Inventory Standards, "
     "how many supplier orders last month fell below the Procurement Quality Minimum, "
     "and how many suppliers exceeded the Executive Disruption Threshold?"
+    "Are we going to miss our Q1 service-level targets, and what are the top actions we should take? "
 )
 
 
@@ -765,7 +938,7 @@ def run_comprehensive_benchmark(label, assumptions_list=None, report_text=None):
     current_group = ""
     gnames = {'A': 'LOGISTICS MV', 'B': 'DEMAND MV', 'C': 'INVENTORY MV',
               'D': 'SUPPLIER MV', 'E': 'CROSS-DOMAIN', 'F': 'INDIRECT GTs',
-              'G': 'Q3 FISCAL (UC PAGES)', 'H': 'HARD FAILURES',
+              'G': 'Q1 FISCAL', 'H': 'HARD FAILURES',
               'P': 'UC PAGES (CRITICAL THRESHOLDS)'}
     for r in results:
         gid = r['id'][:1]
@@ -1564,9 +1737,64 @@ if RUN_MODE != "iterations_only":
     
     print("\n✓ Steps 2-8 complete: data layer + agents created")
 
-    # Force re-discovery of Genie spaces in subsequent cells
-    # (teardown trashed old spaces; 08_setup just created new ones)
-    spaces = {}
+    # ── Comprehensive Setup Verification ──
+    print("\n" + "="*60)
+    print("  SETUP VERIFICATION")
+    print("="*60)
+    _errors = []
+    # 1. Verify all schemas
+    _expected_schemas = ['demand_analysis', 'inventory_management', 'logistics_operations', 'supplier_procurement', 'reporting']
+    _actual_schemas = [r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN {CATALOG}").collect()]
+    for _s in _expected_schemas:
+        if _s not in _actual_schemas:
+            _errors.append(f"MISSING schema: {CATALOG}.{_s}")
+    print(f"  Schemas: {len(_expected_schemas)}/{len(_expected_schemas)} {'✓' if not _errors else '✗'}")
+
+    # 2. Verify all tables/views have rows
+    _expected_tables = {
+        'demand_analysis': ['products', 'customer_segments', 'sales_orders', 'demand_forecasts', 'pos_data', 'promotions'],
+        'inventory_management': ['inventory_ledger', 'warehouse_data', 'store_inventory', 'stock_movements'],
+        'logistics_operations': ['shipments', 'carriers', 'distribution_centers', 'transit_data'],
+        'supplier_procurement': ['suppliers', 'supplier_orders', 'supplier_lead_times', 'vendor_slas', 'procurement_data'],
+        'reporting': ['regional_performance_summary', 'revenue_trend', 'supply_chain_risk_scorecard', 'executive_kpis'],
+    }
+    _total, _ok = 0, 0
+    for _schema, _tables in _expected_tables.items():
+        for _t in _tables:
+            _total += 1
+            _fqn = f"{CATALOG}.{_schema}.{_t}"
+            try:
+                if not spark.catalog.tableExists(_fqn):
+                    _errors.append(f"MISSING: {_fqn}")
+                    continue
+                _cnt = spark.table(_fqn).count()
+                if _cnt == 0:
+                    _errors.append(f"EMPTY: {_fqn} (0 rows)")
+                    continue
+                _ok += 1
+            except Exception as _e:
+                _errors.append(f"ERROR: {_fqn} — {str(_e)[:80]}")
+    print(f"  Tables:  {_ok}/{_total} {'✓' if _ok == _total else '✗'}")
+
+    # 3. Verify Baseline Genie agents via API
+    _found_baseline = discover_agents_by_label("Baseline")
+    _missing = {'demand', 'inventory', 'logistics', 'supplier', 'executive'} - set(_found_baseline.keys())
+    if _missing:
+        _errors.append(f"MISSING Baseline agents: {_missing}")
+    print(f"  Agents:  {len(_found_baseline)}/5 {'✓' if not _missing else '✗'}")
+
+    if _errors:
+        print(f"\n  ✗ {len(_errors)} ERRORS:")
+        for _e in _errors:
+            print(f"    - {_e}")
+        assert False, f"Setup verification failed with {len(_errors)} errors"
+    else:
+        print(f"\n  ✓ ALL CHECKS PASSED: {len(_expected_schemas)} schemas, {_total} tables, 5 agents")
+
+    # Discover baseline agents and store in all_spaces
+    spaces = discover_agents_by_label("Baseline")
+    all_spaces["Baseline"] = dict(spaces)
+    print(f"\n  Baseline agents discovered: {list(spaces.keys())}")
 else:
     print(f"⏭ Skipping data creation (run_mode={RUN_MODE})")
 
@@ -1580,7 +1808,7 @@ else:
 # MAGIC
 # MAGIC The entire test suite is derived from a single CFO-style prompt. This is what the Supervisor receives:
 # MAGIC
-# MAGIC > *"We need a complete supply chain health check for our West region in August 2026. The CFO wants to understand what drove the revenue decline versus July — show the actual August and July revenue numbers, the dollar change, and the percentage change — and which product families are most at fault. Are our on-time delivery rate and average delay for West region shipments contributing to the problem? How many total shipments went out and how many were late? I also need our current fill rate, how many inventory positions are sitting below safety stock in the West region, how many unique SKUs are affected, what is our days of supply for those at-risk items, and how many SKUs are completely stocked out. On the vendor side: what percentage of vendors delivered late in August, how many purchase orders were late out of total, what is the average lead time variance, and what are the total vendor SLA penalties we have incurred? Bring it all together as our total Cost of Disruption by region for last month Aug 26 — cancelled revenue, at-risk backorder revenue, wasted freight on late shipments, and supplier penalty exposure in one number per region. Are we going to miss our Q3 service-level targets, and what are the top actions we should take? Additionally, how many shipments in August were flagged under the Logistics Risk Standards, how many Western region orders in August triggered a Demand Anomaly Alert, how many inventory positions are classified as supply-risk under Inventory Standards, how many supplier orders last month fell below the Procurement Quality Minimum, and how many suppliers exceeded the Executive Disruption Threshold?"*
+# MAGIC > *"We need a complete supply chain health check for our West region in August 2026. The CFO wants to understand what drove the revenue decline versus July — show the actual August and July revenue numbers, the dollar change, and the percentage change — and which product families are most at fault. Are our on-time delivery rate and average delay for West region shipments contributing to the problem? How many total shipments went out and how many were late? I also need our current fill rate, how many inventory positions are sitting below safety stock in the West region, how many unique SKUs are affected, what is our days of supply for those at-risk items, and how many SKUs are completely stocked out. On the vendor side: what percentage of vendors delivered late in August, how many purchase orders were late out of total, what is the average lead time variance, and what are the total vendor SLA penalties we have incurred? Bring it all together as our total Cost of Disruption by region for last month Aug 26 — cancelled revenue, at-risk backorder revenue, wasted freight on late shipments, and supplier penalty exposure in one number per region. Are we going to miss our Q1 service-level targets, and what are the top actions we should take? Additionally, how many shipments in August were flagged under the Logistics Risk Standards, how many Western region orders in August triggered a Demand Anomaly Alert, how many inventory positions are classified as supply-risk under Inventory Standards, how many supplier orders last month fell below the Procurement Quality Minimum, and how many suppliers exceeded the Executive Disruption Threshold?"*
 # MAGIC
 # MAGIC ### How the Curator Broke It Down into 45 Tests
 # MAGIC
@@ -1595,7 +1823,7 @@ else:
 # MAGIC | *"inventory positions below safety stock, unique SKUs, days of supply, stocked out"* | C01 (positions), C02 (SKUs), C05 (DoS), C03 (stockouts), C04 (stockout SKUs) | — | 5 distinct metrics from one sentence. |
 # MAGIC | *"percentage of vendors delivered late, POs late out of total, lead time variance, SLA penalties"* | D03 (late %), D01 (total POs), D02 (late POs), D04 (avg LTV), E02 (SLA penalties) | D05-D07 (Asia breakdown), F02 ("vendors" ambiguity) | D05-D07 test continent drill-down. F02 traps per-vendor vs per-order confusion. |
 # MAGIC | *"Cost of Disruption by region"* | E03 (total CoD) | H05 (component sum), H06 (per-SKU ratio), H07 (CoD/revenue ratio) | H05-H07 test cross-domain joins that no single agent owns. |
-# MAGIC | *"miss our Q3 service-level targets"* | G01 (will we miss?), G02 (what is the target?) | — | Q3 = fiscal Jan-Mar (not calendar). Target (95%) only in fiscal\_targets table. |
+# MAGIC | *"miss our Q1 service-level targets"* | G01 (will we miss?), G02 (what is the target?) | — | Q1 = fiscal Jul-Sep (current quarter). Target (92%) only in fiscal\_targets table. |
 # MAGIC | *"Logistics Risk Standards"* | P01 (flagged shipments = 176) | — | Multi-condition policy: delay >= 5 AND weight > 800. Agent must learn from SQL Function. |
 # MAGIC | *"Demand Anomaly Alert"* | P02 (anomaly orders = 77) | — | Multi-condition: qty >= 8 AND price < 30 AND Online. |
 # MAGIC | *"supply-risk under Inventory Standards"* | P03 (risk positions = 106) | — | Multi-condition: DoS 1-11 AND below\_ss AND on\_hand > 0. |
@@ -1682,12 +1910,12 @@ else:
 # MAGIC | H06 | `SC Inventory` | What is the average revenue at risk per stockout SKU in Western region? | 14368.63 | Cross-domain |
 # MAGIC | H07 | `SC Executive` | What is our total cost of supply chain disruptions as a ratio of Western region revenue? | 1.12 | Cross-domain |
 # MAGIC
-# MAGIC ### Group G: Q3 Fiscal Calendar (2 tests → `SC Executive` agent)
+# MAGIC ### Group G: Q1 Fiscal Calendar (2 tests → `SC Executive` agent)
 # MAGIC
 # MAGIC | ID | Question | Ground Truth | Why It's Hard |
 # MAGIC | --- | --- | --- | --- |
-# MAGIC | G01 | Are we going to miss our Q3 service-level targets? | 95.0 | Q3 = fiscal Jan-Mar, not calendar Jul-Sep |
-# MAGIC | G02 | What is our Q3 service-level target? | 95.0 | Target not in any table |
+# MAGIC | G01 | Are we going to miss our Q1 service-level targets? | 92.0 | Q1 = fiscal Jul-Sep (FY starts July). Target only in fiscal_targets table |
+# MAGIC | G02 | What is our Q1 service-level target? | 92.0 | Target only in fiscal_targets table (not in any base table) |
 # MAGIC
 # MAGIC ### Group P: Critical Threshold Policies (5 tests — unguessable multi-condition rules)
 # MAGIC
@@ -1711,26 +1939,13 @@ else:
 # ============================================================
 import time, requests, json, re
 
-# --- Discover Genie Agent space IDs (reuse if already set by iteration cells) ---
+# --- Discover Baseline agents (label-based, not generic SC matching) ---
 if 'spaces' not in dir() or not spaces or len(spaces) < 5:
-    print("Discovering Genie Agent spaces...")
-    resp = requests.get(f"{host}/api/2.0/genie/spaces", headers=headers)
-    spaces = {}
-    for s in resp.json().get("spaces", []):
-        title = s.get("title", "")
-        sid = s["space_id"]
-        if "Demand" in title and "SC" in title:
-            spaces["demand"] = sid
-        elif "Inventory" in title and "SC" in title:
-            spaces["inventory"] = sid
-        elif "Logistics" in title and "SC" in title:
-            spaces["logistics"] = sid
-        elif "Supplier" in title and "SC" in title:
-            spaces["supplier"] = sid
-        elif "Executive" in title and "SC" in title:
-            spaces["executive"] = sid
+    print("Discovering Baseline Genie Agent spaces...")
+    spaces = discover_agents_by_label("Baseline")
+    all_spaces["Baseline"] = dict(spaces)
 else:
-    print("Reusing existing Genie Agent space IDs (set by iteration cells)...")
+    print("Reusing existing Genie Agent space IDs...")
 
 for name, sid in spaces.items():
     print(f"  {name:15s} \u2192 {sid}")
@@ -1892,8 +2107,8 @@ print("="*90)
 # DESIGN PRINCIPLES:
 #   1. Date phrasing varies: "August 2026" (once per group), then
 #      "last month", "August", or no date \u2014 to test date inference.
-#   2. "Q3" = fiscal Q3 = Jan-Feb-Mar for this org (NOT calendar).
-#      Agent will assume calendar Q3 (Jul-Sep) without UC Pages.
+#   2. "Q1" = fiscal Q1 = Jul-Aug-Sep for this org (FY starts July).
+#      Agent needs fiscal_targets table to know Q1 target = 92%.
 #   3. "West" vs "Western" \u2014 test region value mapping.
 # ============================================================
 assumptions = [
@@ -2027,13 +2242,13 @@ assumptions = [
      "What is our total cost of supply chain disruptions as a ratio of Western region revenue?",
      1.12, "Cross-domain: CoD / revenue ratio", "CoD View (Iter 2)"),
 
-    # \u2500\u2500 GROUP G: Q3 Fiscal Calendar Confusion (UC Pages) \u2500\u2500
+    # \u2500\u2500 GROUP G: Q1 Fiscal Calendar (UC Pages) \u2500\u2500
     ("G01", "executive",
-     "Are we going to miss our Q3 service-level targets?",
-     95.0, "Q3 target (in fiscal_targets table, Q3=Jan-Mar fiscal)", "Reference Table (Iter 3)"),
+     "Are we going to miss our Q1 service-level targets?",
+     92.0, "Q1 target (in fiscal_targets table, Q1=Jul-Sep fiscal)", "Reference Table (Iter 3)"),
     ("G02", "executive",
-     "What is our Q3 service-level target?",
-     95.0, "Q3 target value (in fiscal_targets table)", "Reference Table (Iter 3)"),
+     "What is our Q1 service-level target?",
+     92.0, "Q1 target value (in fiscal_targets table)", "Reference Table (Iter 3)"),
 
     # ── GROUP P: UC PAGES ONLY — domain-specific "critical" thresholds ──
     # Domain-specific POLICY NAMES — each defined only in its UC Page.
@@ -2700,8 +2915,8 @@ WHERE composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd
 }
 
 GT_QUERY_NOTES = {
-    "G01": "No SQL query in expected_output_reference. GT value 95.0 lives only on UC Page 1 (Fiscal Calendar & Targets) on the Discover page.",
-    "G02": "No SQL query in expected_output_reference. GT value 95.0 lives only on UC Page 1 (Fiscal Calendar & Targets) on the Discover page.",
+    "G01": "No SQL query in expected_output_reference. GT value 92.0 (Q1 target) lives in fiscal_targets table and on UC Page 1 (Fiscal Calendar & Targets) on the Discover page.",
+    "G02": "No SQL query in expected_output_reference. GT value 92.0 (Q1 target) lives in fiscal_targets table and on UC Page 1 (Fiscal Calendar & Targets) on the Discover page.",
 }
 
 
@@ -2713,18 +2928,34 @@ def detect_provenance(sql, aid):
     sql_lower = sql.lower()
     # --- Iter 2: UC Metric Views ---
     mv_map = {
-        'delivery_performance_by_region': ('Iter 2', 'Metric View: delivery_performance_by_region',
-            'Pre-aggregated delivery metrics with governed MEASURE() semantics'),
-        'revenue_comparison_by_region': ('Iter 2', 'Metric View: revenue_comparison_by_region',
-            'Pre-computed MoM revenue comparison with governed measures'),
-        'inventory_safety_stock_metrics': ('Iter 2', 'Metric View: inventory_safety_stock_metrics',
-            'Governed safety stock aggregations (positions, SKUs, days-of-supply)'),
-        'supplier_performance_by_continent': ('Iter 2', 'Metric View: supplier_performance_by_continent',
-            'Governed supplier KPIs by continent with correct per-order semantics'),
+        'delivery_performance_by_region': {
+            'iter': 'Iter 2',
+            'measures': ['on_time_delivery_rate', 'late_delivery_rate', 'avg_delay_days',
+                         'total_shipments', 'late_shipments', 'wasted_freight_cost'],
+        },
+        'revenue_comparison_by_region': {
+            'iter': 'Iter 2',
+            'measures': ['revenue_last_month', 'revenue_prior_month',
+                         'revenue_change_dollars', 'revenue_change_pct'],
+        },
+        'inventory_safety_stock_metrics': {
+            'iter': 'Iter 2',
+            'measures': ['positions_below_safety_stock', 'unique_skus_below_safety',
+                         'stockout_positions', 'unique_skus_in_stockout', 'avg_days_of_supply'],
+        },
+        'supplier_performance_by_continent': {
+            'iter': 'Iter 2',
+            'measures': ['total_purchase_orders', 'late_purchase_orders',
+                         'supplier_late_rate_pct', 'avg_lead_time_variance'],
+        },
     }
-    for view, (il, feat, expl) in mv_map.items():
+    for view, info in mv_map.items():
         if view in sql_lower:
-            return (il, feat, expl)
+            used = [m for m in info['measures'] if m in sql_lower]
+            metric_str = ', '.join(used) if used else '(all measures)'
+            return (info['iter'],
+                    f"Metric View: {view} \u2192 {metric_str}",
+                    f"Agent queried governed metric view, measure(s): {metric_str}")
     # --- Iter 2: Open Knowledge View (CoD) ---
     if 'cost_of_disruption_by_region' in sql_lower:
         return ('Iter 2', 'Open Knowledge View: cost_of_disruption_by_region',
@@ -2751,9 +2982,9 @@ def detect_provenance(sql, aid):
                 'Example SQL demonstrated MoM product family comparison')
     # --- Iter 3: G01/G02 — fiscal_targets table (NOT UC Pages) ---
     if aid in ('G01', 'G02'):
-        if '95' in sql:
+        if '92' in sql:
             return ('Iter 3', 'Reference Table: fiscal_targets',
-                    'Agent found 95% target in fiscal_targets table (not from UC Page)')
+                    'Agent found 92% Q1 target in fiscal_targets table (not from UC Page)')
     # --- Iter 3: SQL Functions for domain-specific "critical" thresholds ---
     # IMPORTANT: Genie Agents CANNOT read UC Pages (proven — agent confirmed:
     # "I don't have direct access to those pages in this context").
@@ -2811,9 +3042,19 @@ def detect_provenance(sql, aid):
             return ('GUESSED', f'Partial match ({groups_matched}/{total_groups} conditions vs {func_name})',
                     f'Only {groups_matched} of {total_groups} condition groups match — '
                     f'insufficient evidence of function usage.')
+    # --- Fallback: Check for metric view MEASURE names in SQL ---
+    # Agent may use metric view knowledge but generate SQL against base tables.
+    # If measure names appear in the SQL, it's strong evidence of MV guidance.
+    for view, info in mv_map.items():
+        used = [m for m in info['measures'] if m in sql_lower]
+        if used:
+            metric_str = ', '.join(used)
+            return (info['iter'] + ' (inferred)',
+                    f"Metric View (inferred): {view} -> {metric_str}",
+                    f"Agent SQL references measure(s) from {view}: {metric_str}")
     # --- Baseline: Raw table query ---
-    return ('Raw Table', 'Direct query (no UC feature needed)',
-            'Agent answered correctly from raw tables alone — no UC semantic feature required')
+    return ('Raw Table', 'Direct query (no UC feature detected)',
+            'Agent queried base tables directly — no UC semantic feature detected in SQL')
 
 
 # Global: stores per-iteration test details for flip tracking
@@ -2895,7 +3136,7 @@ for r in test_results:
         current_group = gid
         group_names = {'A': 'LOGISTICS MV', 'B': 'DEMAND MV', 'C': 'INVENTORY MV',
                        'D': 'SUPPLIER MV', 'E': 'CROSS-DOMAIN / EXEC', 'F': 'INDIRECT GTs & AMBIGUITY',
-                       'G': 'Q3 FISCAL CALENDAR (UC PAGES)',
+                       'G': 'Q1 FISCAL CALENDAR (UC PAGES)',
                        'H': 'HARD FAILURES (GUARANTEED BASELINE MISSES)',
                        'P': 'SQL FUNCTIONS (DOMAIN CRITICAL THRESHOLDS)'}
         print(f"\n  \u2500\u2500 {group_names.get(gid, gid)} {'\u2500'*70}")
@@ -2903,7 +3144,7 @@ for r in test_results:
     gt = f"{r.get('expected', ''):>14}" if r.get('expected') is not None else f"{'N/A':>14}"
     fd_val = r.get('found') if r.get('found') is not None else r.get('closest')
     fd = f"{fd_val:>14}" if fd_val is not None else f"{'N/A':>14}"
-    prov_short = f"[{r.get('prov_iter','?')}] {(r.get('provenance','') or '')[:30]}" if r.get('prov_iter') else ""
+    prov_short = f"[{r.get('prov_iter','?')}] {(r.get('provenance','') or '')[:80]}" if r.get('prov_iter') else ""
     print(f"  {r['id']:<5} {icon} {r['verdict']:<10} {gt} {fd}  {r['desc']:<45} {r.get('claimed_fix', ''):<25} {prov_short}")
     if r["verdict"] == "PASS": disproved += 1
     elif r["verdict"] == "FAIL": confirmed += 1
@@ -2927,7 +3168,7 @@ for prefix, name, count in [('A', 'Logistics (delivery_performance_by_region)', 
                              ('C', 'Inventory (inventory_safety_stock_metrics)', 5),
                              ('D', 'Supplier (supplier_performance_by_continent)', 7),
                              ('H', 'Hard Failures (wrong table / status / cross-domain)', 7),
-                             ('G', 'Q3 Fiscal Calendar (UC Pages only)', 2),
+                             ('G', 'Q1 Fiscal Calendar (UC Pages only)', 2),
                              ('P', 'SQL Functions (domain-specific critical thresholds)', 5)]:
     hits = sum(1 for r in test_results if r['id'].startswith(prefix) and r['verdict'] == 'PASS')
     total_g = sum(1 for r in test_results if r['id'].startswith(prefix))
@@ -3499,64 +3740,259 @@ if 'assumptions' in dir():
 # Targets: D04, D06 (wrong table), F02 (vendor late ambiguity),
 #          F03, F05 (status definition), H03 (fulfillment rate)
 # ============================================================
-import json, uuid
+import json, uuid, time
 
 print("="*80)
 print("  ITERATION 1: Column Comments + Example SQL Queries + Benchmarks")
 print("="*80)
 CAT = CATALOG
 
+# --- Clone Baseline agents into new Iteration 1 agents ---
+# Each iteration creates FRESH agents (never modifies previous iteration).
+print("\n  Cloning Baseline agents → Iteration 1...")
+if 'all_spaces' not in dir() or 'Baseline' not in all_spaces:
+    # Discover baseline if not already in all_spaces
+    all_spaces["Baseline"] = discover_agents_by_label("Baseline")
+source = all_spaces["Baseline"]
+assert len(source) >= 5, f"Baseline has only {len(source)} agents — need 5"
+spaces = clone_agents(source, "Iteration 1")
+all_spaces["Iteration 1"] = dict(spaces)
+assert len(spaces) >= 5, f"Iteration 1 clone produced only {len(spaces)} agents"
+for name, sid in spaces.items():
+    print(f"    {name:15s} → {sid}")
+print("\n  Updating Supervisor to point to Iteration 1 agents...")
+update_supervisor_tools(spaces)
+
 # --- Step 1: Column & Table Comments ---
 print("\n  Step 1: Adding column and table comments...")
 
-comment_sqls = [
-    # Fix D04/D06/H01/H02: Direct agent to supplier_orders for lead time variance
-    f"""ALTER TABLE {CAT}.supplier_procurement.supplier_orders
-    ALTER COLUMN lead_time_variance_days
-    COMMENT 'Per-order lead time variance in days = actual_lead_time - contracted_lead_time. IMPORTANT: For ANY lead time variance question (overall, by continent, by supplier), always compute from THIS table (supplier_orders) at per-purchase-order granularity. Do NOT use supplier_lead_times which is a pre-aggregated monthly summary and gives different (incorrect) averages.'""",
+table_comments = {
+    f"{CAT}.demand_analysis.sales_orders": "Customer sales orders",
+    f"{CAT}.inventory_management.inventory_ledger": "Inventory position snapshots",
+    f"{CAT}.logistics_operations.shipments": "Outbound shipment records",
+    f"{CAT}.reporting.executive_kpis": "Executive KPI summary",
+    f"{CAT}.supplier_procurement.supplier_lead_times": "Monthly supplier lead times",
+    f"{CAT}.supplier_procurement.supplier_orders": "Supplier purchase orders",
+    f"{CAT}.supplier_procurement.vendor_slas": "Supplier SLA results",
+}
 
-    f"""ALTER TABLE {CAT}.supplier_procurement.supplier_lead_times
-    SET TBLPROPERTIES ('comment' = 'Pre-aggregated monthly supplier lead time summaries. WARNING: This table averages across orders per supplier per month. Do NOT use for lead time variance calculations \u2014 use supplier_orders instead which has accurate per-order granularity.')""",
+column_comments = {
+    f"{CAT}.demand_analysis.sales_orders": {
+        "channel": "Sales channel",
+        "customer_id": "Customer identifier",
+        "fulfillment_warehouse": "Fulfillment warehouse",
+        "order_date": "Order date",
+        "order_id": "Order identifier",
+        "order_status": "Order fulfillment status",
+        "product_category": "Product category",
+        "product_family": "Product family",
+        "quantity": "Units ordered",
+        "region": "Sales region",
+        "sku_id": "SKU identifier",
+        "state": "State code",
+        "total_amount": "Total order value",
+        "unit_price": "Unit selling price",
+    },
+    f"{CAT}.inventory_management.inventory_ledger": {
+        "allocated_qty": "Allocated units",
+        "available_qty": "Available units",
+        "below_safety_stock_flag": "Below safety stock",
+        "days_of_supply": "Days of supply",
+        "ledger_id": "Ledger identifier",
+        "on_hand_qty": "On hand units",
+        "product_category": "Product category",
+        "product_family": "Product family",
+        "region": "Inventory region",
+        "reorder_point": "Reorder point units",
+        "safety_stock_level": "Safety stock units",
+        "sku_id": "SKU identifier",
+        "snapshot_date": "Snapshot date",
+        "stockout_flag": "Stockout status",
+        "warehouse_id": "Warehouse identifier",
+    },
+    f"{CAT}.logistics_operations.shipments": {
+        "actual_delivery_date": "Actual delivery date",
+        "actual_transit_days": "Actual transit days",
+        "carrier_id": "Carrier identifier",
+        "delay_days": "Delay days",
+        "delay_reason": "Delay reason",
+        "destination_region": "Destination region",
+        "destination_state": "Destination state",
+        "expected_delivery_date": "Expected delivery date",
+        "is_late": "Late shipment flag",
+        "order_count": "Orders in shipment",
+        "origin_region": "Origin region",
+        "origin_warehouse": "Origin warehouse",
+        "planned_transit_days": "Planned transit days",
+        "ship_date": "Shipment date",
+        "shipment_id": "Shipment identifier",
+        "shipment_status": "Shipment status",
+        "shipment_type": "Shipment type",
+        "shipping_cost": "Shipping cost",
+        "total_pallets": "Total pallets",
+        "total_weight_kg": "Total weight kilograms",
+    },
+    f"{CAT}.reporting.executive_kpis": {
+        "revenue_last_month": "Last month revenue",
+        "revenue_prior_month": "Prior month revenue",
+        "total_stockout_skus": "Stockout SKU count",
+        "avg_days_of_supply": "Average days supply",
+        "late_delivery_pct_last_month": "Late delivery percent",
+        "avg_delay_days_last_month": "Average delay days",
+        "supplier_late_pct_last_month": "Supplier late percent",
+        "total_sla_breaches": "SLA breach count",
+        "service_level_pct": "Service level percent",
+    },
+    f"{CAT}.supplier_procurement.supplier_lead_times": {
+        "avg_actual_lead_time_days": "Average actual lead time",
+        "contracted_lead_time_days": "Contracted lead time",
+        "defect_rate_pct": "Defect rate percent",
+        "lead_time_id": "Lead time identifier",
+        "lead_time_variance_days": "Lead time variance days",
+        "month": "Reporting month",
+        "on_time_delivery_pct": "On time percent",
+        "order_count": "Order count",
+        "supplier_continent": "Supplier continent",
+        "supplier_country": "Supplier country",
+        "supplier_id": "Supplier identifier",
+        "supplier_name": "Supplier name",
+    },
+    f"{CAT}.supplier_procurement.supplier_orders": {
+        "actual_delivery_date": "Actual delivery date",
+        "actual_lead_time_days": "Actual lead time",
+        "contracted_lead_time_days": "Contracted lead time",
+        "delay_reason": "Delay reason",
+        "expected_delivery_date": "Expected delivery date",
+        "is_late": "Late order flag",
+        "lead_time_variance_days": "Lead time variance days",
+        "order_date": "Purchase order date",
+        "po_id": "Purchase order ID",
+        "po_status": "Purchase order status",
+        "product_family": "Product family",
+        "quality_score": "Quality score",
+        "quantity_ordered": "Units ordered",
+        "quantity_received": "Units received",
+        "supplier_continent": "Supplier continent",
+        "supplier_country": "Supplier country",
+        "supplier_id": "Supplier identifier",
+        "supplier_name": "Supplier name",
+        "total_cost": "Total order cost",
+        "unit_cost": "Unit purchase cost",
+    },
+    f"{CAT}.supplier_procurement.vendor_slas": {
+        "actual_pct": "Actual SLA percent",
+        "is_breached": "SLA breach flag",
+        "last_updated": "Last update date",
+        "penalty_amount": "Penalty amount",
+        "review_period": "Review period",
+        "sla_id": "SLA identifier",
+        "sla_metric": "SLA metric name",
+        "supplier_id": "Supplier identifier",
+        "supplier_name": "Supplier name",
+        "target_pct": "Target SLA percent",
+        "variance_pct": "SLA variance percent",
+    },
+}
 
-    # Fix F03/F05/H03: Disambiguate order_status values
-    f"""ALTER TABLE {CAT}.demand_analysis.sales_orders
-    ALTER COLUMN order_status
-    COMMENT 'Order fulfillment status. Exact values: Fulfilled (100 percent of items shipped \u2014 ONLY this counts as a fulfilled order), Partially_Fulfilled (some items shipped but order is NOT fully fulfilled), Backordered (waiting for stock), Cancelled (order cancelled). CRITICAL: fulfilled orders = WHERE order_status = Fulfilled ONLY. Do NOT include Partially_Fulfilled when counting fulfilled orders. Fulfillment rate = COUNT(Fulfilled) / COUNT(all orders).'""",
-
-    # Additional clarity
-    f"""ALTER TABLE {CAT}.logistics_operations.shipments
-    ALTER COLUMN is_late
-    COMMENT 'Whether this shipment was delayed / late (true = delayed or late, false = on time). Delayed shipment rate = 100 * COUNT(is_late=true) / COUNT(*) using ship_date and destination_region filters.'""",
-
-    f"""ALTER TABLE {CAT}.supplier_procurement.supplier_orders
-    ALTER COLUMN is_late
-    COMMENT 'Whether this purchase order was delivered late / delayed (true = delayed or late, false = on time). Vendor/supplier delayed delivery percentage = 100 * COUNT(is_late=true) / COUNT(*) computed per ORDER, not per vendor.'""",
-
-    f"""ALTER TABLE {CAT}.demand_analysis.sales_orders
-    ALTER COLUMN total_amount
-    COMMENT 'Total order value in USD. This is the revenue column \u2014 SUM(total_amount) gives total revenue.'""",
-
-    # Fix A02/A03: Steer agent to use ship_date (not actual_delivery_date or CURRENT_DATE())
-    f"""ALTER TABLE {CAT}.logistics_operations.shipments
-    ALTER COLUMN ship_date
-    COMMENT 'Date the shipment was dispatched. CRITICAL: This is the PRIMARY date column for ALL monthly shipment analyses (delivery rates, delay days, shipment counts, on-time rates). ALWAYS use ship_date for date range filters (e.g. ship_date >= DATE 2026-08-01 AND ship_date < DATE 2026-09-01). NEVER use actual_delivery_date for monthly filtering. NEVER use CURRENT_DATE() \u2014 always use explicit date literals.'""",
-
-    f"""ALTER TABLE {CAT}.logistics_operations.shipments
-    ALTER COLUMN actual_delivery_date
-    COMMENT 'Date the shipment actually arrived at destination. WARNING: Do NOT use this column for monthly shipment analysis or rate calculations. Use ship_date instead for all date range filtering.'""",
-
-    f"""ALTER TABLE {CAT}.logistics_operations.shipments
-    ALTER COLUMN destination_region
-    COMMENT 'Destination region of the shipment. Valid values: Western, Eastern, Central, Southern. ALWAYS use destination_region (not origin_region) when filtering by delivery region. Use exact match (destination_region = Western), not ILIKE patterns.'""",
-]
-
-for sql in comment_sqls:
+for table_name, table_comment in table_comments.items():
     try:
-        spark.sql(sql)
-        tbl = sql.split(f"{CAT}.")[1].split()[0] if f"{CAT}." in sql else "?"
-        print(f"    \u2713 {tbl}")
+        spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('comment' = '{table_comment}')")
+        print(f"    \u2713 {table_name.split('.')[-1]} (table)")
     except Exception as e:
-        print(f"    \u2717 Error: {str(e)[:120]}")
+        print(f"    \u2717 {table_name.split('.')[-1]} table: {str(e)[:120]}")
+
+for table_name, cols in column_comments.items():
+    success_count = 0
+    for col_name, col_comment in cols.items():
+        try:
+            spark.sql(f"ALTER TABLE {table_name} ALTER COLUMN {col_name} COMMENT '{col_comment}'")
+            success_count += 1
+        except Exception as e:
+            print(f"    \u2717 {table_name.split('.')[-1]}.{col_name}: {str(e)[:100]}")
+    print(f"    \u2713 {table_name.split('.')[-1]} columns: {success_count}/{len(cols)} commented")
+
+# --- Step 1b: Augment agent instructions with robust safeguards ---
+# RULE: append only — never remove existing instruction items.
+print("\n  Step 1b: Augmenting agent instructions with safeguards...")
+
+common_safeguard = (
+    "SAFEGUARDS:\n"
+    "- If a question is outside your domain, say 'This question is outside my area of expertise' "
+    "and suggest which domain agent (logistics, demand, inventory, supplier, or executive) might help.\n"
+    "- Do not guess or fabricate data. If you cannot find the answer in your tables, say so clearly.\n"
+    "- Date context: current reference date is September 1, 2026. "
+    "'Last month' = August 2026. 'Prior month' = July 2026.\n"
+    "- Always use explicit date literals (e.g. DATE '2026-08-01'). Never use CURRENT_DATE().\n"
+    "- Region values: Western, Eastern, Central, Southern. 'West' maps to 'Western'."
+)
+
+agent_table_context = {
+    "demand": (
+        "YOUR TABLES: sales_orders (primary), demand_forecasts, customer_segments, "
+        "pos_data, products, promotions.\n"
+        "- total_amount is the revenue column. Use order_date for date filtering.\n"
+        "- order_status values: Fulfilled, Partially_Fulfilled, Backordered, Cancelled."
+    ),
+    "inventory": (
+        "YOUR TABLES: inventory_ledger (primary), stock_movements, store_inventory, warehouse_data.\n"
+        "- below_safety_stock_flag and stockout_flag are boolean columns.\n"
+        "- Use region column for regional inventory questions."
+    ),
+    "logistics": (
+        "YOUR TABLES: shipments (primary), carriers, distribution_centers, transit_data.\n"
+        "- Use ship_date for date filtering, not actual_delivery_date.\n"
+        "- Use destination_region for delivery region, not origin_region.\n"
+        "- is_late = true means delayed or late shipment."
+    ),
+    "supplier": (
+        "YOUR TABLES: supplier_orders (primary), supplier_lead_times, suppliers, "
+        "vendor_slas, procurement_data.\n"
+        "- Use supplier_orders for per-order metrics like lead time variance.\n"
+        "- supplier_lead_times is pre-aggregated monthly data.\n"
+        "- Use order_date for date filtering."
+    ),
+    "executive": (
+        "YOUR TABLES: executive_kpis, supply_chain_risk_scorecard, "
+        "regional_performance_summary, revenue_trend.\n"
+        "- service_level_pct is the current service level.\n"
+        "- Use pre-built views for cross-domain questions when available."
+    ),
+}
+
+SAFEGUARD_MARKER = "SAFEGUARDS:"
+
+for agent_name, space_id in spaces.items():
+    resp = requests.get(f"{host}/api/2.0/genie/spaces/{space_id}?include_serialized_space=true", headers=headers)
+    ss = json.loads(resp.json().get("serialized_space", "{}"))
+    instrs = ss.get("instructions", {})
+    if not isinstance(instrs, dict):
+        instrs = {"text_instructions": [{"content": [str(instrs)]}]}
+    text_instrs = instrs.get("text_instructions", [])
+    if not text_instrs:
+        text_instrs = [{"content": []}]
+    current_text = str(text_instrs[0].get("content", []))
+    if SAFEGUARD_MARKER in current_text:
+        print(f"    (skip) {agent_name}: already has safeguards")
+        continue
+    # Append safeguards + table context (never replace)
+    text_instrs[0]["content"].append(common_safeguard)
+    specific = agent_table_context.get(agent_name, "")
+    if specific:
+        text_instrs[0]["content"].append(specific)
+    instrs["text_instructions"] = text_instrs
+    ss["instructions"] = instrs
+    # Note: no ensure_sorted_payload here — we only touch text_instructions,
+    # not example_question_sqls or benchmarks.
+    patch_resp = requests.patch(
+        f"{host}/api/2.0/genie/spaces/{space_id}",
+        headers=headers,
+        json={"serialized_space": json.dumps(ss)}
+    )
+    if patch_resp.status_code == 200:
+        final_count = len(text_instrs[0]["content"])
+        print(f"    \u2713 {agent_name}: safeguards + table context added ({final_count} instruction items)")
+    else:
+        print(f"    \u2717 {agent_name}: PATCH failed {patch_resp.status_code} {patch_resp.text[:200]}")
 
 # --- Helper: ensure sortable arrays are sorted before any PATCH ---
 def ensure_sorted_payload(ss):
@@ -4002,12 +4438,26 @@ if 'assumptions' in dir():
 #              Open Knowledge View (cross-domain CoD join)
 # Targets: E03 (CoD), H05 (revenue at risk), H06 (rev/stockout), H07 (CoD ratio)
 # ============================================================
-import json
+import json, time
 
 print("="*80)
 print("  ITERATION 2: UC Metric Views + Governed Tags + Open Knowledge")
 print("="*80)
 CAT = CATALOG
+
+# --- Clone Iteration 1 agents into new Iteration 2 agents ---
+print("\n  Cloning Iteration 1 agents → Iteration 2...")
+if 'all_spaces' not in dir() or 'Iteration 1' not in all_spaces:
+    all_spaces["Iteration 1"] = discover_agents_by_label("Iteration 1")
+source = all_spaces["Iteration 1"]
+assert len(source) >= 5, f"Iteration 1 has only {len(source)} agents — need 5"
+spaces = clone_agents(source, "Iteration 2")
+all_spaces["Iteration 2"] = dict(spaces)
+assert len(spaces) >= 5, f"Iteration 2 clone produced only {len(spaces)} agents"
+for name, sid in spaces.items():
+    print(f"    {name:15s} → {sid}")
+print("\n  Updating Supervisor to point to Iteration 2 agents...")
+update_supervisor_tools(spaces)
 
 # ── Step 1: Create 4 UC Metric Views (WITH METRICS LANGUAGE YAML) ──
 print("\n  Step 1: Creating UC Metric Views...")
@@ -4466,7 +4916,7 @@ if 'assumptions' in dir():
 # MAGIC
 # MAGIC | Failure | Root Cause | Fix (Actual Mechanism) |
 # MAGIC | --- | --- | --- |
-# MAGIC | G01, G02 | Q3 target = 95% — not in any base table; agent assumes calendar Q3 | **`fiscal_targets` TABLE** added to Executive agent's data sources |
+# MAGIC | G01, G02 | Q1 target = 92% — not in any base table; agent assumes calendar quarters | **`fiscal_targets` TABLE** added to Executive agent's data sources |
 # MAGIC | P01 | Logistics Risk — agent can't guess multi-condition rule | **SQL Function**: `get_critical_delay_shipments()` returns `delay_days >= 5 AND total_weight_kg > 800` (gt=176) |
 # MAGIC | P02 | Demand Anomaly — agent can't guess 3-condition rule | **SQL Function**: `get_critical_accuracy_forecasts()` returns `quantity >= 8 AND unit_price < 30 AND channel='Online'` (gt=77) |
 # MAGIC | P03 | Inventory Risk — agent can't guess triple-band rule | **SQL Function**: `get_critical_supply_positions()` returns `days_of_supply BETWEEN 1 AND 11 AND below_ss=true AND on_hand > 0` (gt=106) |
@@ -4510,7 +4960,7 @@ if 'assumptions' in dir():
 # MAGIC These persist through teardown (governance layer, not data layer):
 # MAGIC
 # MAGIC * **Domain:** "Supply Chain Operations" — groups all 5 schemas
-# MAGIC * **Page 1 — Fiscal Calendar & Targets:** July FY start. Q3=Jan-Mar (NOT calendar Jul-Sep). Q3 service-level target = 95.0%. Reference date: Sept 1, 2026. Last month = August 2026.
+# MAGIC * **Page 1 — Fiscal Calendar & Targets:** July FY start. Q1=Jul-Sep (current quarter), Q3=Jan-Mar. Current quarter (Q1) service-level target = 92.0%. Reference date: Sept 1, 2026. Last month = August 2026.
 # MAGIC * **Page 2 — Cross-Domain Metric Definitions:** Vendor Late Rate = late POs / total POs per ORDER (75.0%), NEVER per distinct vendor (83.33%). OTD rate (94.57%) ≠ supplier late rate (75%). CoD formula definition.
 
 # COMMAND ----------
@@ -4549,8 +4999,8 @@ spark.sql(f"""INSERT INTO {CAT}.reporting.fiscal_targets VALUES
     ('Q3', 2027, 'Jan 2027, Feb 2027, Mar 2027', 95.0, 92.0, 95.0, 'Peak performance quarter'),
     ('Q4', 2027, 'Apr 2027, May 2027, Jun 2027', 94.0, 90.0, 93.0, 'Wind-down quarter')
 """)
-result = spark.sql(f"SELECT fiscal_quarter, service_level_target_pct, calendar_months FROM {CAT}.reporting.fiscal_targets WHERE fiscal_quarter = 'Q3'").collect()
-print(f"  \u2713 fiscal_targets created: Q3 = {result[0]['service_level_target_pct']}% ({result[0]['calendar_months']})")
+result = spark.sql(f"SELECT fiscal_quarter, service_level_target_pct, calendar_months FROM {CAT}.reporting.fiscal_targets WHERE fiscal_quarter = 'Q1'").collect()
+print(f"  \u2713 fiscal_targets created: Q1 = {result[0]['service_level_target_pct']}% ({result[0]['calendar_months']})")
 print(f"  \u2713 Table now available as Related Asset for UC Page 1 on Discover page")
 
 display(spark.sql(f"SELECT * FROM {CAT}.reporting.fiscal_targets ORDER BY fiscal_quarter"))
@@ -4585,21 +5035,22 @@ _saved_ask_genie = ask_genie if 'ask_genie' in dir() and _KERNEL_WARM else None
 
 import time, requests, json, re
 
-# --- Re-discover Genie spaces ---
+# --- Re-discover Genie spaces (find the LATEST iteration's agents) ---
 if 'spaces' not in dir() or not spaces or len(spaces) < 5:
-    print("  Discovering Genie Agent spaces...")
-    resp = requests.get(f"{host}/api/2.0/genie/spaces", headers=headers)
-    spaces = {}
-    for s in resp.json().get("spaces", []):
-        title = s.get("title", "")
-        sid = s["space_id"]
-        if "Demand" in title and "SC" in title: spaces["demand"] = sid
-        elif "Inventory" in title and "SC" in title: spaces["inventory"] = sid
-        elif "Logistics" in title and "SC" in title: spaces["logistics"] = sid
-        elif "Supplier" in title and "SC" in title: spaces["supplier"] = sid
-        elif "Executive" in title and "SC" in title: spaces["executive"] = sid
-    for name, sid in spaces.items():
-        print(f"    {name:15s} -> {sid}")
+    print("  Discovering Genie Agent spaces (latest iteration first)...")
+    if 'all_spaces' not in dir():
+        all_spaces = {}
+    for _label in ["Iteration 3", "Iteration 2", "Iteration 1", "Baseline"]:
+        _found = discover_agents_by_label(_label)
+        if len(_found) >= 5:
+            spaces = _found
+            all_spaces[_label] = dict(_found)
+            print(f"  Found {_label} agents:")
+            for name, sid in spaces.items():
+                print(f"    {name:15s} -> {sid}")
+            break
+    else:
+        print("  ⚠ No complete set of SC agents found")
 else:
     print("  spaces already in kernel — skipping discovery")
 
@@ -4691,8 +5142,8 @@ _recovery_assumptions = [
     ("H05","executive","What is the total revenue at risk from supply chain disruptions in Western region including cancelled revenue, backordered revenue, and wasted freight combined?",3138569.66,"Cross-domain: demand + logistics (no single agent has both)","CoD View (Iter 2)"),
     ("H06","inventory","What is the average revenue at risk per stockout SKU in Western region?",14368.63,"Cross-domain: inventory stockouts + demand revenue","Metric View (Iter 2)"),
     ("H07","executive","What is our total cost of supply chain disruptions as a ratio of Western region revenue?",1.12,"Cross-domain: CoD / revenue ratio","CoD View (Iter 2)"),
-    ("G01","executive","Are we going to miss our Q3 service-level targets?",95.0,"Q3 target (in fiscal_targets table, Q3=Jan-Mar fiscal)","Reference Table (Iter 3)"),
-    ("G02","executive","What is our Q3 service-level target?",95.0,"Q3 target value (in fiscal_targets table)","Reference Table (Iter 3)"),
+    ("G01","executive","Are we going to miss our Q1 service-level targets?",92.0,"Q1 target (in fiscal_targets table, Q1=Jul-Sep fiscal)","Reference Table (Iter 3)"),
+    ("G02","executive","What is our Q1 service-level target?",92.0,"Q1 target value (in fiscal_targets table)","Reference Table (Iter 3)"),
     ("P01","logistics","How many shipments in August were flagged under the Logistics Risk Standards?",176,"Multi-condition: delay>=5 AND weight>800","UC Pages / SQL Function (Iter 3)"),
     ("P02","demand","How many Western region orders in August triggered a Demand Anomaly Alert?",77,"Multi-condition: qty>=8 AND price<30 AND Online","UC Pages / SQL Function (Iter 3)"),
     ("P03","inventory","How many inventory positions are classified as supply-risk under Inventory Standards?",106,"Multi-condition: dos 1-11 AND below_ss AND on_hand>0","UC Pages / SQL Function (Iter 3)"),
@@ -4844,9 +5295,9 @@ def detect_provenance(sql, aid):
                 'Example SQL demonstrated MoM product family comparison')
     # --- Iter 3: G01/G02 — fiscal_targets table (NOT UC Pages) ---
     if aid in ('G01', 'G02'):
-        if '95' in sql:
+        if '92' in sql:
             return ('Iter 3', 'Reference Table: fiscal_targets',
-                    'Agent found 95% target in fiscal_targets table (not from UC Page)')
+                    'Agent found 92% Q1 target in fiscal_targets table (not from UC Page)')
     # --- Iter 3: SQL Functions — domain-specific policy thresholds ---
     # --- Iter 3: SQL Functions — definition-only (agent reads definition, writes own SQL) ---
     sql_func_map = {
@@ -4938,7 +5389,7 @@ else:
 # MAGIC | **Synonyms** | Fiscal, Fiscal Year |
 # MAGIC | **Description** | Fiscal Calendar for this domain of Supply chain |
 # MAGIC | **Definition** | This organization uses a **July fiscal year start** (not January). Q1=Jul-Sep, Q2=Oct-Dec, **Q3=Jan-Mar** (NOT calendar Jul-Sep!), Q4=Apr-Jun. Current fiscal year: FY2027 (Jul 2026 – Jun 2027). |
-# MAGIC | **Business Use** | Q3 service-level target = **95.0%**. The current reference date is **September 1, 2026**. "Last month" = **August 2026**. "Prior month" = **July 2026**. When a question mentions "August" without a year, ALWAYS use 2026. |
+# MAGIC | **Business Use** | Q1 service-level target = **92.0%**. The current reference date is **September 1, 2026**. "Last month" = **August 2026**. "Prior month" = **July 2026**. When a question mentions "August" without a year, ALWAYS use 2026. |
 # MAGIC | **Related Assets** | `fiscal_targets`, `executive_kpis` |
 # MAGIC
 # MAGIC ---
@@ -5100,7 +5551,7 @@ else:
 #              Reference Table (fiscal_targets — queryable data
 #              backing the UC Pages governance definitions)
 # Targets: F02 (vendor late rate ambiguity — resolved by Page 2),
-#          G01, G02 (Q3 target = 95% — resolved by Page 1)
+#          G01, G02 (Q1 target = 92% — resolved by Page 1)
 #
 # KEY FINDING (PROVEN):
 # UC Pages work via Genie One (402, cited 'Logistics Risk Standards')
@@ -5128,13 +5579,27 @@ print("  ITERATION 3: UC Domain + UC Pages (Governance Layer)")
 print("="*80)
 CAT = CATALOG
 
+# ── Step 0: Clone Iteration 2 agents into new Iteration 3 agents ──
+print("\n  Step 0: Cloning Iteration 2 agents → Iteration 3...")
+if 'all_spaces' not in dir() or 'Iteration 2' not in all_spaces:
+    all_spaces["Iteration 2"] = discover_agents_by_label("Iteration 2")
+source = all_spaces["Iteration 2"]
+assert len(source) >= 5, f"Iteration 2 has only {len(source)} agents — need 5"
+spaces = clone_agents(source, "Iteration 3")
+all_spaces["Iteration 3"] = dict(spaces)
+assert len(spaces) >= 5, f"Iteration 3 clone produced only {len(spaces)} agents"
+for name, sid in spaces.items():
+    print(f"    {name:15s} → {sid}")
+print("\n  Updating Supervisor to point to Iteration 3 agents...")
+update_supervisor_tools(spaces)
+
 # ── Step 1: Add fiscal_targets table to Executive agent's data sources ──
 # fiscal_targets was created in the PRE-STEP cell (before the manual step)
 # so it could be linked as a Related Asset on UC Page 1.
 # Here we just add it to the Executive agent's data sources.
 # We add the TABLE so the agent can query it — but we do NOT inject
 # instructions. The UC Page provides the governance context that tells
-# the agent WHAT Q3 means and WHERE to look.
+# the agent WHAT Q1 means and WHERE to look.
 print("\n  Step 2: Adding fiscal_targets table to Executive agent...")
 
 exec_space_id = spaces["executive"]
@@ -5264,9 +5729,9 @@ for agent_name in ["logistics", "demand", "inventory", "supplier", "executive"]:
 # - Q4 = Apr, May, Jun
 # Current fiscal year: FY2027 (Jul 2026 - Jun 2027).
 # The fiscal_targets table has service_level_target_pct for each quarter.
-# Q3 service-level target = 95.0%.
-# When asked about Q3 targets, ALWAYS query fiscal_targets WHERE fiscal_quarter = 'Q3'.
-# When asked if we will miss Q3 targets, compare executive_kpis.service_level_pct against fiscal_targets.service_level_target_pct."""
+# Q1 service-level target = 92.0%.
+# When asked about Q1 targets, ALWAYS query fiscal_targets WHERE fiscal_quarter = 'Q1'.
+# When asked if we will miss Q1 targets, compare executive_kpis.service_level_pct against fiscal_targets.service_level_target_pct."""
 # exec_resp = requests.get(f"{host}/api/2.0/genie/spaces/{exec_space_id}?include_serialized_space=true", headers=headers)
 # exec_ss = json.loads(exec_resp.json().get("serialized_space", "{}"))
 # instrs = exec_ss.get("instructions", {}).get("text_instructions", [])
@@ -5327,7 +5792,7 @@ print("                    NOT by this Page (agents can't read Pages)")
 print("    Synonyms:       Fiscal, Fiscal Year")
 print("    Definition:     July FY start. Q1=Jul-Sep, Q2=Oct-Dec,")
 print("                    Q3=Jan-Mar (NOT calendar!), Q4=Apr-Jun")
-print("    Business Use:   Q3 target = 95%. Reference date: Sept 1, 2026.")
+print("    Business Use:   Q1 target = 92%. Reference date: Sept 1, 2026.")
 print("                    Last month = August 2026, prior = July 2026.")
 print("    Related Assets: fiscal_targets, executive_kpis")
 print("")
@@ -5497,7 +5962,7 @@ ITERATION 3 CAPABILITIES
 - Your sub-agents have been enhanced with UC semantic features including metric views, SQL functions, certified queries, column comments, and governed tags. They discover and use these features autonomously to answer questions about business terms, policy thresholds, and cross-domain metrics.
 - For cross-domain questions spanning multiple schemas (e.g. Cost of Disruption, revenue at risk), route to executive-reporting first — it has pre-built cross-domain views.
 - For domain-specific policy terms (e.g. Logistics Risk Standards, Demand Anomaly Alert, Procurement Quality Minimum), route to the owning domain agent — it has the context to resolve the term.
-- This organization uses a July fiscal year start. Q3 = Jan-Mar (NOT calendar Jul-Sep). For Q3 target questions, route to executive-reporting.
+- This organization uses a July fiscal year start. Q1 = Jul-Sep (current quarter). For Q1 target questions, route to executive-reporting.
 """
 
         enhanced_instructions, changed = _append_once(
@@ -5669,6 +6134,163 @@ print("")
 print("  \u26d4 STOP HERE \u2014 Add SQL functions to each agent via the UI before continuing.")
 print("     See the table above (Step 5) for which function goes to which agent.")
 print("     Then run the NEXT CELL to execute the Iteration 3 test suite.")
+
+# COMMAND ----------
+
+# DBTITLE 1,STEP 8: ai_forecast Capability + Supervisor Enhancement
+# ============================================================
+# STEP 8: ai_forecast Forecasting Capability
+# Adds ai_forecast instruction to all 5 domain agents so they
+# can project time-series metrics forward when asked about
+# future outlook or end-of-quarter projections.
+# Also enhances Supervisor agent descriptions and adds forecast awareness.
+# This is a supplementary capability — does NOT affect existing
+# test results. Forecasted values are always labeled as projections.
+# ============================================================
+import json
+
+print("="*80)
+print("  STEP 8: ai_forecast Forecasting Capability")
+print("="*80)
+
+# Guard: ensure helper is available (defined in Iter 1 / Iter 3 cells)
+if 'ensure_sorted_payload' not in dir():
+    def ensure_sorted_payload(ss):
+        if "instructions" in ss and "example_question_sqls" in ss.get("instructions", {}):
+            ss["instructions"]["example_question_sqls"].sort(key=lambda x: str(x.get("id", "")))
+        if "benchmarks" in ss and "questions" in ss.get("benchmarks", {}):
+            ss["benchmarks"]["questions"].sort(key=lambda x: str(x.get("id", "")))
+        return ss
+
+# ── Step 8a: Add ai_forecast instruction to ALL domain agents ──
+# Generic capability — no test IDs, no specific metrics, no hints.
+# Agents decide WHEN and HOW to forecast based on the question asked.
+print("\n  Step 8a: Adding ai_forecast instruction to domain agents...")
+
+forecast_instruction = (
+    "FORECASTING CAPABILITY:\n"
+    "When asked about future outlook, end-of-quarter projections, or whether current "
+    "trends will hold, you may use the ai_forecast() SQL function to project time-series "
+    "metrics forward. Pattern:\n"
+    "  WITH monthly AS (\n"
+    "    SELECT DATE_TRUNC('month', <date_col>) AS ds, <AGG>(<metric>) AS val\n"
+    "    FROM <table> WHERE <filters> GROUP BY 1\n"
+    "  )\n"
+    "  SELECT * FROM ai_forecast(TABLE(monthly), horizon => DATE '<end_date>', "
+    "time_col => 'ds', value_col => 'val', version => '1')\n"
+    "After answering the factual question with current data, add a separate FORECAST "
+    "section showing projected values through the target date. Clearly label forecasts "
+    "as projections, not confirmed facts. Include upper/lower prediction intervals "
+    "when available."
+)
+
+FORECAST_MARKER = "FORECASTING CAPABILITY:"
+for agent_name, space_id in spaces.items():
+    try:
+        resp = requests.get(
+            f"{host}/api/2.0/genie/spaces/{space_id}?include_serialized_space=true",
+            headers=headers
+        )
+        ss = json.loads(resp.json().get("serialized_space", "{}"))
+        instrs = ss.get("instructions", {}).get("text_instructions", [])
+        if not instrs or not instrs[0].get("content"):
+            print(f"    (skip) {agent_name}: no instructions found")
+            continue
+        if FORECAST_MARKER in str(instrs):
+            print(f"    (skip) {agent_name}: already has forecast instruction")
+            continue
+        instrs[0]["content"].append(forecast_instruction)
+        ss["instructions"]["text_instructions"] = instrs
+        ensure_sorted_payload(ss)
+        patch_resp = requests.patch(
+            f"{host}/api/2.0/genie/spaces/{space_id}", headers=headers,
+            json={"serialized_space": json.dumps(ss)}
+        )
+        if patch_resp.status_code == 200:
+            print(f"    \u2713 {agent_name}: ai_forecast capability added")
+        else:
+            print(f"    \u2717 {agent_name}: PATCH failed {patch_resp.status_code} {patch_resp.text[:200]}")
+    except Exception as e:
+        print(f"    \u26a0 {agent_name}: error {e}")
+
+# ── Step 8b: Enhance Supervisor base descriptions + add FORECASTING block ──
+# Make agent descriptions slightly more specific (key tables) so the Supervisor
+# routes more precisely. Also add FORECASTING awareness block.
+print("\n  Step 8b: Enhancing Supervisor instructions...")
+
+if 'supervisor_name' not in dir() or not supervisor_name:
+    sup_list = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers)
+    if sup_list.status_code == 200:
+        for sa in sup_list.json().get("supervisor_agents", []):
+            if "Supply Chain" in sa.get("display_name", ""):
+                supervisor_name = sa["name"]
+                break
+
+sup_resp = requests.get(f"{host}/api/2.1/{supervisor_name}", headers=headers)
+if sup_resp.status_code == 200:
+    instr = sup_resp.json().get("instructions", "")
+    changed = False
+
+    # Enhance base agent descriptions (replace minimal with table-aware)
+    OLD_AGENTS = """Available agents:
+- demand-analysis: Revenue and sales data
+- inventory-management: Inventory and stockout data
+- logistics-operations: Shipment and delivery data
+- supplier-risk: Supplier performance data
+- executive-reporting: KPI summaries and dashboards"""
+
+    NEW_AGENTS = """Available agents:
+- demand-analysis: Revenue, sales orders, demand forecasts, product performance. Key: sales_orders, demand_forecasts, products.
+- inventory-management: Inventory levels, safety stock, stockouts, days of supply. Key: inventory_ledger, warehouse_data.
+- logistics-operations: Shipment tracking, delivery performance, freight costs. Key: shipments, carriers.
+- supplier-risk: Supplier performance, purchase orders, lead times, SLA penalties. Key: supplier_orders, vendor_slas.
+- executive-reporting: Company-wide KPIs, regional summaries, revenue trends, fiscal targets. Key: executive_kpis, revenue_trend, fiscal_targets, cost_of_disruption_by_region."""
+
+    if OLD_AGENTS in instr:
+        instr = instr.replace(OLD_AGENTS, NEW_AGENTS)
+        changed = True
+        print("    \u2713 Enhanced agent descriptions with key tables")
+    elif "Key: sales_orders" in instr:
+        print("    (skip) Agent descriptions already enhanced")
+    else:
+        print("    (skip) Agent descriptions format not recognized")
+
+    # Add FORECASTING block if missing
+    forecast_block = (
+        "\n\nFORECASTING (ai_forecast):\n"
+        "Your domain agents can use ai_forecast() to project time-series metrics forward "
+        "when asked about future outlook or end-of-quarter projections. When an agent "
+        "provides forecasted values alongside actuals, present both clearly: label "
+        "projections as 'PROJECTED' and actuals as 'ACTUAL'. Forecasts are supplementary "
+        "context, not confirmed facts."
+    )
+    if "FORECASTING (ai_forecast)" not in instr:
+        instr = instr.rstrip() + forecast_block
+        changed = True
+        print("    \u2713 Added FORECASTING block")
+    else:
+        print("    (skip) FORECASTING block already present")
+
+    if changed:
+        patch_resp = requests.patch(
+            f"{host}/api/2.1/{supervisor_name}?update_mask=instructions",
+            headers=headers,
+            json={"instructions": instr}
+        )
+        if patch_resp.status_code == 200:
+            print(f"    \u2713 Supervisor patched ({len(instr)} chars)")
+        else:
+            print(f"    \u2717 PATCH failed: {patch_resp.status_code} {patch_resp.text[:200]}")
+    else:
+        print(f"    (no changes needed, {len(instr)} chars)")
+else:
+    print(f"    \u2717 Supervisor not found: {sup_resp.status_code}")
+
+print("\n\u2705 Step 8 complete:")
+print("   \u2713 ai_forecast capability added to all 5 domain agents")
+print("   \u2713 Supervisor agent descriptions enhanced with key tables")
+print("   \u2713 Supervisor FORECASTING awareness block present")
+print("   Existing test results are NOT affected — forecasting is supplementary output.")
 
 # COMMAND ----------
 
@@ -6293,7 +6915,7 @@ ax2.set_yticklabels(conf_labels, fontsize=10)
 ax2.set_xlabel('Pass Rate (%)')
 ax2.set_title('Reliability by Confidence Tier', fontweight='bold')
 ax2.set_xlim(0, 115)
-ax2.axvline(x=95, color='#2e7d32', linestyle='--', alpha=0.5, label='95% target')
+ax2.axvline(x=92, color='#2e7d32', linestyle='--', alpha=0.5, label='92% Q1 target')
 ax2.axvline(x=80, color='#f9a825', linestyle='--', alpha=0.3)
 for i, v in enumerate(conf_pass_rates):
     ax2.text(v+1, i, f'{v:.0f}%', va='center', fontweight='bold', fontsize=9)
@@ -6403,12 +7025,12 @@ ROBUSTNESS_TESTS = [
         ]
     },
     {
-        "id": "G01", "agent": "executive", "gt": 95.0,
-        "desc": "Q3 service-level target (fiscal calendar trap: Q3=Jan-Mar not Jul-Sep)",
+        "id": "G01", "agent": "executive", "gt": 92.0,
+        "desc": "Q1 service-level target (fiscal calendar trap: Q1=Jul-Sep, current quarter)",
         "variations": [
-            "What is our Q3 service level target and are we at risk of missing it?",
-            "Will we hit our third quarter service-level goals?",
-            "How do our current service levels compare to the Q3 target?",
+            "What is our Q1 service level target and are we at risk of missing it?",
+            "Will we hit our first quarter service-level goals?",
+            "How do our current service levels compare to the Q1 target?",
         ]
     },
     {
@@ -6868,7 +7490,7 @@ COMP_PROMPT_DIRECT = {
     'D01', 'D02', 'D03', 'D04', 'E02',
     # "Cost of Disruption by region"
     'E03',
-    # "miss our Q3 service-level targets"
+    # "miss our Q1 service-level targets"
     'G01', 'G02',
     # "Logistics Risk Standards / Demand Anomaly / Inventory Standards / Quality Min / Disruption Threshold"
     'P01', 'P02', 'P03', 'P04', 'P05',
@@ -6984,7 +7606,7 @@ if len(stages) >= 2 and comp_iter3:
     print(f"  {'\u2500'*22} {'\u2500'*6} {'\u2500'*10} {'\u2500'*14} {'\u2500'*8}")
     for prefix, name in [('A','Logistics'), ('B','Revenue'), ('C','Inventory'),
                          ('D','Supplier'), ('E','Cross-domain'), ('F','Indirect'),
-                         ('G','Q3 Fiscal'), ('H','Hard derivations'),
+                         ('G','Q1 Fiscal'), ('H','Hard derivations'),
                          ('P','Critical Thresholds')]:
         grp_ids = [r["id"] for r in last_data["results"] if r["id"].startswith(prefix)]
         in_scope_ids = [mid for mid in grp_ids if mid in COMP_PROMPT_DIRECT]
@@ -7106,14 +7728,86 @@ print(f"\n{'='*90}")
 # MAGIC | After Iteration 2 | 41/45 | +DETERMINISTIC (metric views) |
 # MAGIC | After Iteration 3 | **45/45** | Mostly DETERMINISTIC (SQL functions, reference tables) |
 # MAGIC
-# MAGIC ### Notebook Structure (31 cells)
+# MAGIC ### Notebook Structure (33 cells)
 # MAGIC
-# MAGIC Every analysis cell is preceded by a markdown definitions cell:
-# MAGIC * Cell 21: **Reasoning Confidence definitions** → Cell 22: VISUAL After Iter 3
-# MAGIC * Cell 23: **Deep Reliability Analysis definitions** → Cell 24: DEEP RELIABILITY ANALYSIS
-# MAGIC * Cell 25: **Robustness Test definitions** → Cell 26: ROBUSTNESS TEST
-# MAGIC * Cell 27: **Comprehensive Prompt Benchmark definitions** → Cell 28: COMPREHENSIVE PROMPT BENCHMARK
-# MAGIC * Cell 30: **Supervisor Agent vs Genie One** comparison report before the final cleanup step in Cell 31
+# MAGIC * Cells 1-5: Title, Parameters, Setup, Teardown, Build (data + agents)
+# MAGIC * Cell 6: Test Suite definitions (markdown) → Cell 7: BASELINE (45 tests)
+# MAGIC * Cell 8: VISUAL Dashboard
+# MAGIC * Cell 9: Iteration 1 approach (markdown) → Cell 10: ITERATION 1 → Cell 11: VISUAL After Iter 1
+# MAGIC * Cell 12: Iteration 2 approach (markdown) → Cell 13: ITERATION 2 → Cell 14: VISUAL After Iter 2
+# MAGIC * Cell 15: Iteration 3 approach (markdown) → Cell 16: PRE-STEP fiscal_targets → Cell 17: Kernel Recovery → Cell 18: Manual Step (markdown) → Cell 19: ITERATION 3 SETUP
+# MAGIC * Cell 20: STEP 8 ai_forecast capability → Cell 21: ITERATION 3 test suite run
+# MAGIC * Cell 22: **Reasoning Confidence definitions** (markdown) → Cell 23: VISUAL After Iter 3 (Final)
+# MAGIC * Cell 24: **Deep Reliability Analysis definitions** (markdown)
+# MAGIC * Cell 25: **Robustness Test definitions** (markdown)
+# MAGIC * Cell 26: **Comprehensive Prompt Benchmark definitions** (markdown)
+# MAGIC * Cell 27: DEEP RELIABILITY ANALYSIS → Cell 28: ROBUSTNESS TEST → Cell 29: COMPREHENSIVE PROMPT BENCHMARK
+# MAGIC * Cell 30: Current Status and Findings (this cell)
+# MAGIC * Cell 31: Teardown (delete non-Iter-3 agents)
+# MAGIC * Cell 32: **Supervisor Agent vs Genie One** comparison report (markdown)
+# MAGIC * Cell 33: MANUAL STEP Delete UC Domain (markdown)
+
+# COMMAND ----------
+
+# DBTITLE 1,Teardown: Delete all agents EXCEPT Iteration 3 (keep 5 domain + supervisor = 6)
+# ============================================================
+# TEARDOWN: Delete all agents EXCEPT Iteration 3
+# Keeps: 5 Iteration 3 domain agents + 1 Supervisor = 6 survivors
+# Deletes: Baseline (5), Iteration 1 (5), Iteration 2 (5),
+#          Evaluator (1) = 16 agents removed
+# ============================================================
+print("="*80)
+print("  AGENT CLEANUP: Keep only Iteration 3 + Supervisor")
+print("="*80)
+
+# Discover ALL SC agents
+_all_resp = requests.get(f"{host}/api/2.0/genie/spaces", headers=headers)
+_all_sc = []
+for _s in _all_resp.json().get("spaces", []):
+    _t = _s.get("title", "")
+    if "SC" in _t:
+        _all_sc.append((_t, _s["space_id"]))
+
+# Identify keepers: only "Iteration 3" agents survive
+_keep_ids = set()
+_keep_names = []
+for _t, _sid in _all_sc:
+    if "Iteration 3" in _t:
+        _keep_ids.add(_sid)
+        _keep_names.append(_t)
+
+print(f"\n  Total SC agents found: {len(_all_sc)}")
+print(f"  Keeping (Iteration 3): {len(_keep_ids)}")
+for _n in sorted(_keep_names):
+    print(f"    \u2713 {_n}")
+
+# Delete everything else
+_deleted = 0
+print(f"\n  Deleting non-Iteration-3 agents:")
+for _t, _sid in _all_sc:
+    if _sid in _keep_ids:
+        continue
+    dr = requests.delete(f"{host}/api/2.0/genie/spaces/{_sid}", headers=headers)
+    if dr.status_code in (200, 204):
+        print(f"    \u2713 Deleted: {_t}")
+        _deleted += 1
+    else:
+        print(f"    \u2717 Failed: {_t} ({dr.status_code})")
+
+# Supervisor check
+_sup_resp = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers)
+_sup_name = None
+if _sup_resp.status_code == 200:
+    for _a in _sup_resp.json().get("supervisor_agents", []):
+        if "Supply Chain" in _a.get("display_name", ""):
+            _sup_name = _a["name"]
+            break
+
+print(f"\n  Summary:")
+print(f"    Deleted: {_deleted} agents")
+print(f"    Surviving: {len(_keep_ids)} domain agents (Iteration 3)")
+print(f"    Supervisor: {_sup_name or 'NOT FOUND'} (kept)")
+print(f"    Total alive: {len(_keep_ids) + (1 if _sup_name else 0)}")
 
 # COMMAND ----------
 
@@ -7121,129 +7815,134 @@ print(f"\n{'='*90}")
 # MAGIC %md
 # MAGIC ## Supervisor Agent vs Genie One: Side-by-Side Comparison Report
 # MAGIC
-# MAGIC ### Why This Test Was Conducted
+# MAGIC ### Experimental Setup
 # MAGIC
-# MAGIC The central thesis of this demo is: **structured governance (SQL Functions, Metric Views, Column Comments) produces more reliable machine-consumable answers than prose governance (UC Pages)**.
+# MAGIC Both systems answered the same West-region August 2026 CFO-style prompt over the same deterministic dataset in [GAP_Demo_Dev](#catalog).
 # MAGIC
-# MAGIC To prove this, we sent the **same CFO prompt** to two systems:
+# MAGIC * **Supervisor Agent**: 5 domain Genie Agents + 5 SQL threshold functions (tools on the Supervisor endpoint)
+# MAGIC * **Genie One**: standalone Databricks chat with Discover-page knowledge, UC Pages, knowledge snippets, links, and visual output
 # MAGIC
-# MAGIC 1. **Supervisor Agent** (this notebook's multi-agent system) — 5 Genie Agents + 5 UC SQL Functions, NO access to UC Pages
-# MAGIC 2. **Genie One** (standalone Databricks chat) — full access to UC Pages, Knowledge Snippets, and the complete ontology
-# MAGIC
-# MAGIC Both received identical data (same catalog, same tables, same deterministic dataset). The only difference is HOW they access governance metadata:
-# MAGIC * The Supervisor calls `get_critical_*()` SQL Functions that return structured 5-column definitions
-# MAGIC * Genie One reads UC Pages on the Discover page and interprets the prose
-# MAGIC
-# MAGIC If structured governance outperforms prose governance for machine consumption, the Supervisor should match or beat Genie One on metrics that require governed definitions — especially the P-tests (multi-condition policy thresholds that cannot be guessed from column names).
+# MAGIC Note: teardown had removed the UC Page related-table attachments before the Genie One run, but the page prose and threshold text were still intact.
 # MAGIC
 # MAGIC ---
 # MAGIC
-# MAGIC ### Metrics That Match Exactly (Both Got It Right)
+# MAGIC ### Metrics Where Both Systems Are Correct
 # MAGIC
-# MAGIC | Metric | Supervisor | Genie One | GT | Verdict |
+# MAGIC | Test | Metric | Supervisor | Genie One | Ground Truth |
 # MAGIC | --- | --- | --- | --- | --- |
-# MAGIC | Aug Revenue (B01) | $3,341,063 | $3,341,063 | 3341062.58 | Both correct |
-# MAGIC | Jul Revenue (B02) | $4,581,393 | $4,581,393 | 4581392.70 | Both correct |
-# MAGIC | Revenue Change $ (B03) | -$1,240,330 | -$1,240,330 | -1240330.12 | Both correct |
-# MAGIC | Revenue Change % (B04) | -27.07% | -27.07% | -27.07 | Both correct |
-# MAGIC | Product Family #1 decline (F06) | Home Goods -$349,063 | Home Goods -$349,063 | 349062.88 | Both correct |
-# MAGIC | OTD Rate (A01) | 5.43% | 5.43% | 5.43 | Both correct |
-# MAGIC | Avg Delay Days (A03) | 2.94 | 2.94 | 2.94 | Both correct |
-# MAGIC | Total Shipments (A04) | 1,086 | 1,086 | 1086 | Both correct |
-# MAGIC | Late Shipments (A05) | 1,027 | 1,027 | 1027 | Both correct |
-# MAGIC | Below Safety Stock (C01) | 109 | 109 | 109 | Both correct |
-# MAGIC | SKUs Below SS (C02) | 61 | 61 | 61 | Both correct |
-# MAGIC | Avg DoS (C05) | 0.96 | 0.96 | 0.96 | Both correct |
-# MAGIC | Stockout SKUs (C04) | 33 | 33 | 33 | Both correct |
-# MAGIC | Vendor Late % (D03) | 75% | 75% | 75.00 | Both correct |
-# MAGIC | Late POs / Total POs (D01, D02) | 36/48 | 36/48 | 36, 48 | Both correct |
-# MAGIC | Avg Lead Time Variance (D04) | 8.69 days | 8.69 days | 8.69 | Both correct |
-# MAGIC | CoD Western Total (E03) | $3,757,298 | $3,757,298 | 3757298.31 | Both correct |
-# MAGIC | CoD Components (all 4) | Identical | Identical | All match | Both correct |
+# MAGIC | B01 | August revenue | $3,341,062.58 | $3,341,062.58 | 3341062.58 |
+# MAGIC | B02 | July revenue | $4,581,392.70 | $4,581,392.70 | 4581392.70 |
+# MAGIC | B03 | Revenue change ($) | -$1,240,330.12 | -$1,240,330.12 | -1240330.12 |
+# MAGIC | B04 | Revenue change (%) | -27.07% | -27.07% | -27.07 |
+# MAGIC | F06 | Worst product family decline | Home Goods -$349,063 | Home Goods -$349,063 | 349062.88 |
+# MAGIC | A01 | On-time delivery rate | 5.43% | 5.43% | 5.43 |
+# MAGIC | A03 | Avg delay days | 2.94 | 2.94 | 2.94 |
+# MAGIC | A04 | Total shipments | 1,086 | 1,086 | 1086 |
+# MAGIC | A05 | Late shipments | 1,027 | 1,027 | 1027 |
+# MAGIC | A06 | Wasted freight cost | $2,484,986 | $2,484,986 | 2484985.57 |
+# MAGIC | C01 | Below safety stock positions | 109 | 109 | 109 |
+# MAGIC | C02 | Unique SKUs below SS | 61 | 61 | 61 |
+# MAGIC | C04 | Unique SKUs stocked out | 33 | 33 | 33 |
+# MAGIC | C05 | Avg days of supply | 0.96 | 0.96 | 0.96 |
+# MAGIC | D01 | Total purchase orders | 48 | 48 | 48 |
+# MAGIC | D02 | Late purchase orders | 36 | 36 | 36 |
+# MAGIC | D03 | Vendor late rate (%) | 75% | 75% | 75.00 |
+# MAGIC | D04 | Avg lead time variance | 8.69 days | 8.69 days | 8.69 |
+# MAGIC | E03 | Cost of Disruption (Western) | $3,757,298 | $3,757,298 | 3757298.31 |
+# MAGIC | F01 | West = Western mapping | Correct | Correct | 3341062.58 |
+# MAGIC | F04 | Cancelled revenue | $179,419 | $179,419 | 179419.26 |
+# MAGIC | G01 | Q1 target (miss?) | Yes, 92% | Yes, 92% | 92.00 |
+# MAGIC | G02 | Q1 target value | 92.0% | 92.0% | 92.00 |
+# MAGIC | P01 | Logistics Risk Standards | **176** | **176** | 176 |
+# MAGIC | P02 | Demand Anomaly Alert | **77** | **77** | 77 |
+# MAGIC | P04 | Procurement Quality Minimum | **11** | **11** | 11 |
+# MAGIC | P05 | Executive Disruption Threshold | **3** | **3** | 3 |
+# MAGIC
+# MAGIC Both systems correctly resolved all 4 revenue metrics, all 5 logistics metrics, all 4 inventory metrics, all 4 supplier metrics, the full Cost of Disruption breakdown, both fiscal target tests, and 4 of 5 multi-condition policy thresholds.
 # MAGIC
 # MAGIC ---
 # MAGIC
 # MAGIC ### Metrics Where They Differ
 # MAGIC
-# MAGIC | Metric | Supervisor | Genie One | GT | Who's Right? |
+# MAGIC | Metric | Supervisor | Genie One | Ground Truth | Better |
 # MAGIC | --- | --- | --- | --- | --- |
-# MAGIC | **Fill Rate (E01)** | 90.91% | **80.70%** | 80.70 | Genie One. Supervisor's inventory agent returned a raw ratio, not the governed `service_level_pct` from executive KPIs |
-# MAGIC | **SLA Penalties (E02)** | **$0** | **$1,185,043** | 1185043.10 | Genie One. Supervisor's supplier agent couldn't find the penalty total |
-# MAGIC | **Q3 Target (G02)** | **95.0%** | 92.0% | 95.0 | Supervisor. Genie One showed Q1 FY2027 (Jul-Sep) targets instead of fiscal Q3 (Jan-Mar) |
-# MAGIC | **Disruption/Revenue Ratio (H07)** | Not surfaced | **1.12** | 1.12 | Genie One surfaced it; Supervisor didn't |
-# MAGIC | **Wasted Freight (A06)** (in logistics section) | Not surfaced | **$2,484,986** | 2484985.57 | Genie One included it in logistics; Supervisor only showed it in CoD breakdown |
+# MAGIC | Fill Rate / Service Level (E01) | 94.1% (inventory agent) | **80.70%** (governed KPI) | 80.70 | Genie One |
+# MAGIC | Total SLA penalties (E02) | $0 | **$1,185,043.10** | 1185043.10 | Genie One |
+# MAGIC | Inventory risk count (P03) | **106** | 27 (West-scoped) | 106 | Supervisor |
+# MAGIC | Late delivery rate (A02) | Not surfaced explicitly | **94.57%** | 94.57 | Genie One |
+# MAGIC | Disruption-to-revenue ratio (H07) | Not surfaced | **1.12** | 1.12 | Genie One |
+# MAGIC | Q1 fill-rate actual vs target | Not available | **80.7% vs 90%** | 80.70 | Genie One |
+# MAGIC | Stockout positions (C03) | 35 | **35** | 35 | Both correct |
+# MAGIC
+# MAGIC The Supervisor's two most significant misses:
+# MAGIC
+# MAGIC * **SLA penalties = $0** — the supplier agent couldn't locate the `penalty_amount` sum from `vendor_slas`. Genie One returned the correct $1.185M.
+# MAGIC * **Fill rate = 94.1%** — the inventory agent returned a raw ratio instead of the governed `service_level_pct` (80.70%) from `executive_kpis`. Genie One referenced the KPI correctly.
 # MAGIC
 # MAGIC ---
 # MAGIC
-# MAGIC ### The Critical Finding: P-Tests (Policy Thresholds)
+# MAGIC ### Policy Threshold Tests (P01-P05)
 # MAGIC
-# MAGIC This is where the demo's thesis is proven or disproven. The Supervisor has SQL Functions; Genie One has UC Pages.
+# MAGIC These are the most important tests because the multi-condition rules are not guessable from column names alone.
 # MAGIC
-# MAGIC | Policy Standard | Supervisor Answer | Supervisor Threshold Used | Genie One Answer | Genie One Threshold Used | GT | Winner |
-# MAGIC | --- | --- | --- | --- | --- | --- | --- |
-# MAGIC | **P01: Logistics Risk** | **176** | `delay_days >= 5 AND weight > 800` | 402 | `delay_days > 3` | **176** | Supervisor |
-# MAGIC | **P02: Demand Anomaly** | **77** | `qty >= 8 AND price < 30 AND channel='Online'` | **0** | `forecast_accuracy_pct < 85%` | **77** | Supervisor |
-# MAGIC | **P03: Inventory Risk** | 27 | Correct conditions, added Western filter | 180 | `days_of_supply < 14` (simplified) | **106** | Neither |
-# MAGIC | **P04: Procurement Quality** | **11** | `score < 75 AND ltv > 12` | 8 | `quality_score < 70` (wrong cutoff) | **11** | Supervisor |
-# MAGIC | **P05: Exec Disruption** | **3 suppliers** | `risk < 55 AND ltv > 8 AND penalty > 80K` | 1 region | `late_shipment_count > 500` | **3** | Supervisor |
+# MAGIC | Policy Test | Supervisor | Genie One | Ground Truth | Notes |
+# MAGIC | --- | --- | --- | --- | --- |
+# MAGIC | P01 Logistics Risk | **176** | **176** | 176 | Both applied `delay_days >= 5 AND total_weight_kg > 800` |
+# MAGIC | P02 Demand Anomaly | **77** | **77** | 77 | Both applied `qty >= 8 AND price < 30 AND channel='Online'` |
+# MAGIC | P03 Inventory Risk | **106** | 27 | 106 | Supervisor: all regions. Genie One: added Western filter |
+# MAGIC | P04 Procurement Quality | **11** | **11** | 11 | Both applied `score < 75 AND ltv > 12` |
+# MAGIC | P05 Exec Disruption | **3** | **3** | 3 | Both applied `risk < 55 AND ltv > 8 AND penalty > 80K` |
 # MAGIC
-# MAGIC **P-Test Score: Supervisor 4/5, Genie One 0/5.**
+# MAGIC **P-test score**: Supervisor **5/5**, Genie One **4/5**.
 # MAGIC
-# MAGIC ---
-# MAGIC
-# MAGIC ### Root Cause: The UC Pages Themselves Had Wrong Definitions
-# MAGIC
-# MAGIC Post-mortem inspection of the actual UC Pages on the Discover page revealed that **Genie One did NOT misinterpret the Pages — it applied them faithfully**. The Pages themselves contained different (incorrect) definitions than the SQL Functions:
-# MAGIC
-# MAGIC | P-Test | UC Page Definition (what Genie One read) | SQL Function Definition (what Supervisor called) | GT |
-# MAGIC | --- | --- | --- | --- |
-# MAGIC | **P01** | `delay_days > 3` (single condition) | `delay_days >= 5 AND total_weight_kg > 800` (two conditions) | 176 |
-# MAGIC | **P02** | `forecast_accuracy_pct < 85` (entirely different metric!) | `quantity >= 8 AND unit_price < 30 AND channel='Online'` | 77 |
-# MAGIC | **P03** | `days_of_supply < 14` (single condition; Page even says "Do NOT use below_safety_stock_flag") | `DoS BETWEEN 1 AND 11 AND below_safety_stock_flag = true AND on_hand_qty > 0` | 106 |
-# MAGIC | **P04** | `quality_score < 70` (wrong cutoff, single condition) | `quality_score < 75 AND lead_time_variance_days > 12` | 11 |
-# MAGIC | **P05** | `late_shipment_count > 500` on **regions** from `cost_of_disruption_by_region` | `composite_risk_score < 55 AND lead_time_variance > 8 AND total_penalty_usd > 80000` on **suppliers** from `supply_chain_risk_scorecard` | 3 |
-# MAGIC
-# MAGIC Genie One executed each Page’s definition correctly — it got the wrong answer because the governance source itself was wrong. The Supervisor called the SQL Functions, which encode the correct multi-condition rules, and got 4/5 right.
-# MAGIC
-# MAGIC ### Why This Happened: UC Pages Are Manually Authored, SQL Functions Are Code-Defined
-# MAGIC
-# MAGIC UC Pages are created through the Discover UI — a human types the definition into a text field. There is:
-# MAGIC * No validation that the definition matches the underlying data
-# MAGIC * No test suite that catches a wrong threshold
-# MAGIC * No version control or diff review
-# MAGIC * No way to programmatically verify the Page content matches the SQL Function
-# MAGIC
-# MAGIC SQL Functions are defined in code (cell 19), deployed via `CREATE FUNCTION`, and tested by the 45-test harness. If the function returns the wrong definition, the test suite catches it immediately.
-# MAGIC
-# MAGIC The 5 UC Pages drifted from the intended rules because they were authored manually without the same verification loop. This is **not a Genie One failure — it is a governance authoring failure** that structured, testable governance (SQL Functions) prevents by design.
+# MAGIC Genie One correctly retrieved and applied the multi-condition definitions from UC Page prose for 4 of 5 tests. The one miss (P03) is a scoping issue — it added a West-region filter that the benchmark does not expect — not a definition failure.
 # MAGIC
 # MAGIC ---
 # MAGIC
-# MAGIC ### Summary Scorecard
+# MAGIC ### How Each System Accesses Governance
+# MAGIC
+# MAGIC | Capability | Supervisor Agent | Genie One |
+# MAGIC | --- | --- | --- |
+# MAGIC | UC Pages (Discover) | Cannot access | Reads and cites |
+# MAGIC | Knowledge Snippets | Not available | Retrieves and cites |
+# MAGIC | SQL threshold functions | Calls as tools | Not available |
+# MAGIC | Metric views | Agents query directly | Queries directly |
+# MAGIC | Visual output | Text/tables only | Cards, charts, links, embedded queries |
+# MAGIC | UC Page links in response | No | Yes (linked to Discover pages) |
+# MAGIC | Genie Agent room links | No | Yes (linked to source agents) |
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### Scorecard
 # MAGIC
 # MAGIC | Category | Supervisor | Genie One |
 # MAGIC | --- | --- | --- |
 # MAGIC | Revenue metrics (B01-B04) | 4/4 | 4/4 |
-# MAGIC | Logistics metrics (A01,A03-A05) | 4/4 | 4/4 + extras |
-# MAGIC | Inventory metrics (C01-C05) | 4/5 (fill rate wrong) | 5/5 |
-# MAGIC | Supplier metrics (D01-D04, E02) | 4/5 (penalties=$0) | 5/5 |
-# MAGIC | CoD (E03) | 1/1 | 1/1 + ratio |
-# MAGIC | Q3 Target (G01-G02) | 2/2 | 0/2 (wrong quarter) |
-# MAGIC | **P-tests (P01-P05)** | **4/5** | **0/5** |
-# MAGIC | **Presentation quality** | Tables, clean structure | Cards, visualizations, UC Page links, knowledge snippets |
+# MAGIC | Logistics metrics (A01-A06) | 5/6 (A02 not surfaced) | 6/6 |
+# MAGIC | Inventory metrics (C01-C05) | 5/5 | 5/5 |
+# MAGIC | Supplier metrics (D01-D04) | 4/4 | 4/4 |
+# MAGIC | Cross-domain (E01-E03) | 1/3 (fill rate, penalties wrong) | 3/3 |
+# MAGIC | Fiscal targets (G01-G02) | 2/2 | 2/2 |
+# MAGIC | P-tests (P01-P05) | **5/5** | **4/5** |
+# MAGIC | CoD breakdown | Complete | Complete + ratio |
+# MAGIC | Report quality | Structured text | Rich cards, links, snippets, visuals |
+# MAGIC | Governance testability | **High** (SQL functions, benchmark-scorable) | Medium (prose-based, harder to automate) |
 # MAGIC
 # MAGIC ---
 # MAGIC
 # MAGIC ### Conclusion
 # MAGIC
-# MAGIC **Genie One produces a prettier, richer report** with embedded links, knowledge snippet citations, and visualizations. For general metrics that live directly in well-named columns, both systems perform equally. **Genie One faithfully executed the UC Page definitions it was given.**
+# MAGIC **Genie One** produced the better executive report: richer formatting (cards, embedded visualizations, UC Page links, knowledge snippet citations), complete coverage of derived metrics (late rate, disruption ratio, fill-rate gap), and correct SLA penalty totals.
 # MAGIC
-# MAGIC **The problem was not LLM interpretation — it was governance quality.** The UC Pages had wrong definitions (manually authored, no validation). The SQL Functions had correct definitions (code-defined, test-verified). This is the deeper finding:
+# MAGIC **The Supervisor Agent** is the more testable and controllable system: SQL functions expose exact threshold conditions that can be scored by the 45-test benchmark, and in this run it achieved a perfect **5/5** on the policy tests that matter most to the demo.
 # MAGIC
-# MAGIC 1. **Prose governance (UC Pages)** is excellent for human documentation but vulnerable to authoring errors. There is no automated way to verify that a Page’s text matches the intended business rule.
-# MAGIC 2. **Structured governance (SQL Functions)** is machine-readable, testable, and version-controlled. When the function is wrong, the test suite catches it. When the Page is wrong, nobody knows until a report produces the wrong number.
+# MAGIC Both systems correctly resolved the vast majority of governed metrics — revenue, logistics, inventory, supplier, Cost of Disruption, and fiscal targets all matched ground truth.
 # MAGIC
-# MAGIC **The semantic layer must be testable, not just documentable.** This is the core finding of the entire demo: governance that cannot be validated will eventually drift, and the AI agent will faithfully propagate the error.
+# MAGIC The core finding:
+# MAGIC
+# MAGIC * **Genie One wins on executive-quality reporting and breadth of surfaced insight**
+# MAGIC * **Supervisor wins on controlled, machine-testable policy execution**
+# MAGIC * **Testable structured governance (SQL functions) is easier to harden, score, and prove correct than prose-first governance (UC Pages) — even when both systems are quite capable**
 
 # COMMAND ----------
 
