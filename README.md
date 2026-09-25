@@ -1011,6 +1011,53 @@ The master orchestrator notebook ("Supply Chain Control Tower Curator Workbench"
 
 **Key design principle**: Each iteration adds ONE category of UC feature. The progression proves that **data governance → better AI answers**.
 
+### Provenance Map: Which UC Feature Fixed Which Test
+
+The tables below show exactly which governed asset fixed each failing test, verified from the live execution output. **28 of 45 tests pass at baseline** — the agent inferred correct SQL from raw column/table names alone (INFERRED confidence, fragile to rephrasing). The remaining **17 required UC governance features** to produce the correct answer reliably.
+
+#### Iteration 1: Column Comments + Example SQL + Benchmarks (28 → 35, net +7)
+
+| Test | Metric | Baseline Error | Specific UC Feature That Fixed It | Confidence |
+|---|---|---|---|---|
+| A02 | Late delivery rate (gt=94.57) | Used `origin_region OR destination_region` → 84.97% | **Example SQL** on logistics agent: query teaching `destination_region = 'Western'` + `ship_date` filtering | HEURISTIC |
+| A03 | Avg delay days (gt=2.94) | Extra `origin_region` filter → 2.58 days | **Example SQL** on logistics agent: teaching `AVG(CASE WHEN is_late THEN delay_days END)` with `destination_region` only | HEURISTIC |
+| B03 | Revenue change $ (gt=-1,240,330) | Wrong sign/calculation → +1,174,078 | **Column Comment** on `sales_orders.total_amount` ("Total order value") + **Safeguard Instructions** with date context (`DATE '2026-08-01'`) | HEURISTIC |
+| D04 | Avg lead time variance (gt=8.69) | Used `supplier_lead_times` (pre-aggregated monthly) → 9.0 | **Example SQL** on supplier agent: explicitly taught `supplier_orders` table for per-order lead time variance | HEURISTIC |
+| D06 | Avg LTV Asia (gt=13.67) | Used `supplier_lead_times` for Asia → 18.0 | **Example SQL** on supplier agent: taught `supplier_orders WHERE supplier_continent = 'Asia'` | HEURISTIC |
+| F02 | Vendor late % (gt=75.0) | Computed per-vendor (81%) not per-order (75%) | **Example SQL** on supplier agent: taught per-order `COUNT(CASE WHEN is_late ...)` pattern | HEURISTIC |
+| F06 | Worst product family decline (gt=349,063) | Wrong comparison direction | **Example SQL** on demand agent: taught `Aug vs Jul` revenue comparison per `product_family` with `ORDER BY revenue_change ASC LIMIT 1` | HEURISTIC |
+| H01 | Europe lead time variance (gt=0.38) | Wrong table (`supplier_lead_times`) → -0.4 | **Column Comments** on `supplier_orders` columns + **Safeguard Instructions** with table context: "Use `supplier_orders` for per-order metrics" | HEURISTIC |
+| H02 | NA lead time variance (gt=0.4) | Wrong table (`supplier_lead_times`) → 0.85 | **Column Comments** + **Safeguard Instructions**: same table disambiguation as H01 | HEURISTIC |
+| P03 | Inventory risk count (gt=106) | Was PASS at baseline, **regressed** to 100 | Safeguard instructions disrupted the agent's raw inference. Recovered in Iter 2. | (regressed) |
+| P04 | Procurement quality (gt=11) | Was PASS at baseline, **regressed** to -12 | Safeguard instructions disrupted the agent's raw inference. Fixed by SQL Function in Iter 3. | (regressed) |
+
+#### Iteration 2: Metric Views + Governed Tags + CoD View (35 → 40, net +5)
+
+| Test | Metric | Iter 1 Error | Specific UC Feature That Fixed It | Confidence |
+|---|---|---|---|---|
+| E03 | Cost of Disruption Western (gt=$3,757,298) | No cross-domain table → returned revenue ($3.34M) | **Open Knowledge View**: `cost_of_disruption_by_region` joining `demand_analysis` (cancelled/backordered revenue) + `logistics_operations` (wasted freight) + `supplier_procurement` (SLA penalties) | DETERMINISTIC |
+| H05 | Revenue at risk (gt=$3,138,570) | No single agent has demand + logistics | **Open Knowledge View**: `cost_of_disruption_by_region.revenue_at_risk` column directly queryable by executive agent | DETERMINISTIC |
+| H06 | Stockout revenue impact (gt=$14,369) | Cross-domain inventory + demand → wrong (15,965) | **Metric View**: `inventory_safety_stock_metrics` — pre-computed join with correct `sku_warehouse_positions` grain | DETERMINISTIC |
+| H07 | Disruption-to-revenue ratio (gt=1.12) | Guessed 1.0 — no formula available | **Open Knowledge View**: `cost_of_disruption_by_region.disruption_to_revenue_ratio` pre-computed as `total_cod / revenue` | DETERMINISTIC |
+| P03 | Inventory risk count (gt=106) | Regressed in Iter 1 (100 vs 106) | **Recovered** — metric view stability and cleaner agent context restored correct multi-condition query | DETERMINISTIC |
+
+#### Iteration 3: SQL Functions + fiscal_targets Reference Table (40 → 45/45, +5)
+
+| Test | Metric | Iter 2 Error | Specific UC Feature That Fixed It | Confidence |
+|---|---|---|---|---|
+| G01 | Q1 service-level target at risk? (gt=92.0) | Guessed 94.6% — no reference table existed | **Reference Table**: `reporting.fiscal_targets` — contains `fiscal_quarter='Q1'`, `target_value=92.0`, `fiscal_year_start_month=7` (FY starts July) | DETERMINISTIC |
+| G02 | Q1 target value (gt=92.0) | Guessed 82.0% | **Reference Table**: `reporting.fiscal_targets` — same lookup | DETERMINISTIC |
+| P01 | Logistics Risk Standards (gt=176) | Guessed -167 — multi-condition rule unguessable from column names | **SQL Function**: `get_critical_delay_shipments()` returns definition: `delay_days >= 5 AND total_weight_kg > 800`. Agent reads definition, writes own SQL with both conditions. | DETERMINISTIC |
+| P02 | Demand Anomaly Alert (gt=77) | Guessed 74.1 — triple condition unguessable | **SQL Function**: `get_critical_accuracy_forecasts()` returns definition: `quantity >= 8 AND unit_price < 30 AND channel = 'Online'`. Agent applies all three conditions. | DETERMINISTIC |
+| P04 | Procurement Quality Minimum (gt=11) | Guessed -12 — regressed since baseline | **SQL Function**: `get_critical_quality_orders()` returns definition: `quality_score < 75 AND lead_time_variance_days > 12`. Agent applies both conditions correctly. | DETERMINISTIC |
+
+#### Reliability Assessment
+
+* **Iteration 1 fixes (HEURISTIC)**: Likely repeatable but not guaranteed. If the user rephrases significantly, the agent may bypass the Example SQL pattern. These are guidance-based, not structure-based.
+* **Iteration 2 fixes (DETERMINISTIC)**: Highly reliable. The metric views and CoD view are pre-computed; the agent simply queries the view rather than reconstructing the formula. Cannot drift.
+* **Iteration 3 fixes (DETERMINISTIC)**: Highly reliable. The SQL functions return explicit definitions (concept, conditions, source table). The agent reads the definition and writes SQL with the exact conditions. The reference table contains the exact value.
+* **P05 (always passed)**: The agent guessed the 3-condition Executive Disruption threshold correctly at baseline by coincidence (GUESSED confidence). It became DETERMINISTIC in Iter 3 when `get_critical_disruption_regions()` was added — same answer, but now governed and repeatable.
+
 ### What Each Iteration Does NOT Fix
 
 | Stage | What Still Fails | Why |

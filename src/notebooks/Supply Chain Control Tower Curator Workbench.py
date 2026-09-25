@@ -45,19 +45,21 @@
 # MAGIC | 17 | Kernel Recovery (warm kernel / state rebuild — discovers latest iteration agents) | Python |
 # MAGIC | 18 | **Manual Step**: Create UC Domain + Pages on the Discover page | Markdown |
 # MAGIC | 19 | **Iteration 3 setup**: Clone Iteration 2 → Iteration 3 agents, register fiscal targets + SQL functions | Python |
-# MAGIC | 20 | **Iteration 3**: Full 45-test rerun | Python |
-# MAGIC | 21 | Reasoning confidence definitions | Markdown |
-# MAGIC | 22 | VISUAL: After Iteration 3 (Final) | Python |
-# MAGIC | 23 | Deep Reliability Analysis: key terms | Markdown |
-# MAGIC | 24 | DEEP RELIABILITY ANALYSIS | Python |
-# MAGIC | 25 | Robustness Test: key terms | Markdown |
-# MAGIC | 26 | ROBUSTNESS TEST | Python |
-# MAGIC | 27 | Comprehensive Prompt Benchmark: key terms | Markdown |
-# MAGIC | 28 | **Comprehensive Prompt Benchmark**: LIVE Supervisor call | Python |
-# MAGIC | 29 | Current Status and Findings | Markdown |
-# MAGIC | 30 | **Agent Cleanup**: Delete all agents except Iteration 3 (keep 5 domain + supervisor = 6) | Python |
-# MAGIC | 31 | Supervisor Agent vs Genie One comparison report | Markdown |
-# MAGIC | 32 | Manual step: Delete UC Domain (cleanup) | Markdown |
+# MAGIC | 20 | **Step 8**: ai_forecast capability + Supervisor enhancement | Python |
+# MAGIC | 21 | **Step 9**: Enable entity matching on key string columns | Python |
+# MAGIC | 22 | **Iteration 3**: Full 45-test rerun | Python |
+# MAGIC | 23 | Reasoning confidence definitions | Markdown |
+# MAGIC | 24 | VISUAL: After Iteration 3 (Final) | Python |
+# MAGIC | 25 | Deep Reliability Analysis: key terms | Markdown |
+# MAGIC | 26 | DEEP RELIABILITY ANALYSIS | Python |
+# MAGIC | 27 | Robustness Test: key terms | Markdown |
+# MAGIC | 28 | ROBUSTNESS TEST | Python |
+# MAGIC | 29 | Comprehensive Prompt Benchmark: key terms | Markdown |
+# MAGIC | 30 | **Comprehensive Prompt Benchmark**: LIVE Supervisor call | Python |
+# MAGIC | 31 | Current Status and Findings | Markdown |
+# MAGIC | 32 | **Agent Cleanup**: Delete all agents except Iteration 3 (keep 5 domain + supervisor = 6) | Python |
+# MAGIC | 33 | Supervisor Agent vs Genie One comparison report | Markdown |
+# MAGIC | 34 | Manual step: Delete UC Domain (cleanup) | Markdown |
 # MAGIC
 # MAGIC ### The 45 tests (9 groups)
 # MAGIC
@@ -91,7 +93,7 @@
 # MAGIC | Baseline | Bare tables, no comments, no views | 28/45 (non-deterministic) | Agent guesses from column/table names. Answers vary across runs. |
 # MAGIC | **1** | Column/Table Comments, Example SQL Queries (Genie Examples tab), Benchmarks | 37/45 | Comments steer agent to correct tables. Example SQL teaches correct patterns. |
 # MAGIC | **2** | UC Metric Views (4), Governed Tags, Schema Tags, Open Knowledge View (CoD) | 41/45 | Pre-computed KPIs eliminate formula ambiguity. CoD view enables cross-domain answers. |
-# MAGIC | **3** | `fiscal_targets` table, SQL Functions (5) for critical thresholds, plus UC Domain + Pages as human-facing governance | **45/45 (deterministic)** | Every final answer is grounded in a governed asset, reference table, or structured function. |
+# MAGIC | **3** | `fiscal_targets` table, SQL Functions (5) for critical thresholds, Entity Matching on key string columns, plus UC Domain + Pages as human-facing governance | **45/45 (deterministic)** | Every final answer is grounded in a governed asset, reference table, or structured function. Entity matching resolves fuzzy user input. |
 # MAGIC
 # MAGIC ### Provenance and Evaluation System
 # MAGIC
@@ -3899,9 +3901,27 @@ for table_name, table_comment in table_comments.items():
         spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('comment' = '{table_comment}')")
         print(f"    \u2713 {table_name.split('.')[-1]} (table)")
     except Exception as e:
-        print(f"    \u2717 {table_name.split('.')[-1]} table: {str(e)[:120]}")
+        if "EXPECT_TABLE_NOT_VIEW" in str(e):
+            try:
+                spark.sql(f"ALTER VIEW {table_name} SET TBLPROPERTIES ('comment' = '{table_comment}')")
+                print(f"    \u2713 {table_name.split('.')[-1]} (view)")
+            except Exception as e2:
+                print(f"    \u2717 {table_name.split('.')[-1]} view: {str(e2)[:120]}")
+        else:
+            print(f"    \u2717 {table_name.split('.')[-1]} table: {str(e)[:120]}")
 
 for table_name, cols in column_comments.items():
+    # Views don't support ALTER COLUMN COMMENT — detect and skip
+    is_view = False
+    try:
+        obj_type = spark.sql(f"DESCRIBE EXTENDED {table_name}").filter("col_name = 'Type'").collect()
+        if obj_type and 'VIEW' in str(obj_type[0]['data_type']).upper():
+            is_view = True
+    except Exception:
+        pass
+    if is_view:
+        print(f"    (skip) {table_name.split('.')[-1]} columns: view — column comments not supported")
+        continue
     success_count = 0
     for col_name, col_comment in cols.items():
         try:
@@ -6147,7 +6167,7 @@ print("     Then run the NEXT CELL to execute the Iteration 3 test suite.")
 # This is a supplementary capability — does NOT affect existing
 # test results. Forecasted values are always labeled as projections.
 # ============================================================
-import json
+import json, time
 
 print("="*80)
 print("  STEP 8: ai_forecast Forecasting Capability")
@@ -6202,14 +6222,23 @@ for agent_name, space_id in spaces.items():
         instrs[0]["content"].append(forecast_instruction)
         ss["instructions"]["text_instructions"] = instrs
         ensure_sorted_payload(ss)
-        patch_resp = requests.patch(
-            f"{host}/api/2.0/genie/spaces/{space_id}", headers=headers,
-            json={"serialized_space": json.dumps(ss)}
-        )
-        if patch_resp.status_code == 200:
-            print(f"    \u2713 {agent_name}: ai_forecast capability added")
+        for attempt in range(3):
+            patch_resp = requests.patch(
+                f"{host}/api/2.0/genie/spaces/{space_id}", headers=headers,
+                json={"serialized_space": json.dumps(ss)}
+            )
+            if patch_resp.status_code == 200:
+                print(f"    \u2713 {agent_name}: ai_forecast capability added")
+                break
+            elif patch_resp.status_code == 429:
+                wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                print(f"    \u23f3 {agent_name}: rate-limited, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"    \u2717 {agent_name}: PATCH failed {patch_resp.status_code} {patch_resp.text[:200]}")
+                break
         else:
-            print(f"    \u2717 {agent_name}: PATCH failed {patch_resp.status_code} {patch_resp.text[:200]}")
+            print(f"    \u2717 {agent_name}: failed after 3 retries (429)")
     except Exception as e:
         print(f"    \u26a0 {agent_name}: error {e}")
 
@@ -6291,6 +6320,134 @@ print("   \u2713 ai_forecast capability added to all 5 domain agents")
 print("   \u2713 Supervisor agent descriptions enhanced with key tables")
 print("   \u2713 Supervisor FORECASTING awareness block present")
 print("   Existing test results are NOT affected — forecasting is supplementary output.")
+
+# COMMAND ----------
+
+# DBTITLE 1,STEP 9: Enable Entity Matching on Key String Columns
+# ============================================================
+# STEP 9: Enable Entity Matching on Key String Columns
+# Entity matching allows Genie to fuzzy-match user values to
+# actual column values (e.g. "West" → "Western", "online" → "Online").
+# Each Genie agent can use entity matching on up to 120 string columns.
+# This is an Advanced column feature in the Genie Agent UI;
+# here we enable it programmatically via serialized_space API.
+# ============================================================
+import json, time
+
+print("="*80)
+print("  STEP 9: Enable Entity Matching on Key String Columns")
+print("="*80)
+CAT = CATALOG
+
+# Define which string columns benefit from entity matching per agent.
+# These are categorical columns where users type fuzzy values.
+ENTITY_MATCHING_COLUMNS = {
+    "demand": {
+        f"{CAT}.demand_analysis.sales_orders": [
+            "region", "order_status", "product_family", "channel", "product_category"
+        ],
+        f"{CAT}.demand_analysis.products": [
+            "product_family", "product_category"
+        ],
+    },
+    "inventory": {
+        f"{CAT}.inventory_management.inventory_ledger": [
+            "region", "product_family", "product_category"
+        ],
+    },
+    "logistics": {
+        f"{CAT}.logistics_operations.shipments": [
+            "destination_region", "origin_region", "shipment_status", "delay_reason"
+        ],
+    },
+    "supplier": {
+        f"{CAT}.supplier_procurement.supplier_orders": [
+            "supplier_continent", "supplier_country", "supplier_name",
+            "product_family", "po_status"
+        ],
+        f"{CAT}.supplier_procurement.vendor_slas": [
+            "supplier_name", "sla_metric"
+        ],
+    },
+    "executive": {},  # Views — entity matching applies to base tables only
+}
+
+ENTITY_MATCH_MARKER = "__entity_matching_applied__"
+
+for agent_name, table_cols in ENTITY_MATCHING_COLUMNS.items():
+    space_id = spaces.get(agent_name)
+    if not space_id:
+        print(f"  (skip) {agent_name}: space not found")
+        continue
+    if not table_cols:
+        print(f"  (skip) {agent_name}: no base tables to configure")
+        continue
+
+    resp = requests.get(
+        f"{host}/api/2.0/genie/spaces/{space_id}?include_serialized_space=true",
+        headers=headers
+    )
+    if resp.status_code != 200:
+        print(f"  \u2717 {agent_name}: GET failed {resp.status_code}")
+        continue
+
+    ss = json.loads(resp.json().get("serialized_space", "{}"))
+    tables = ss.get("data_sources", {}).get("tables", [])
+    changed = False
+
+    for table_entry in tables:
+        table_id = table_entry.get("identifier", "")
+        target_cols = table_cols.get(table_id, [])
+        if not target_cols:
+            continue
+
+        # Build column config with entity matching enabled
+        existing_cols = {c.get("identifier", c.get("name", "")): c
+                         for c in table_entry.get("columns", [])}
+
+        for col_name in target_cols:
+            if col_name in existing_cols:
+                existing_cols[col_name]["is_entity_matching_enabled"] = True
+            else:
+                existing_cols[col_name] = {
+                    "identifier": col_name,
+                    "is_entity_matching_enabled": True
+                }
+            changed = True
+
+        table_entry["columns"] = list(existing_cols.values())
+
+    if not changed:
+        print(f"  (skip) {agent_name}: no matching tables found in data sources")
+        continue
+
+    ss.setdefault("data_sources", {})["tables"] = tables
+    ensure_sorted_payload(ss)
+
+    # PATCH with retry for rate limiting
+    for attempt in range(3):
+        patch_resp = requests.patch(
+            f"{host}/api/2.0/genie/spaces/{space_id}", headers=headers,
+            json={"serialized_space": json.dumps(ss)}
+        )
+        if patch_resp.status_code == 200:
+            col_count = sum(len(v) for v in table_cols.values())
+            print(f"  \u2713 {agent_name}: entity matching enabled on {col_count} columns")
+            break
+        elif patch_resp.status_code == 429:
+            wait = 2 ** (attempt + 1)
+            print(f"  \u23f3 {agent_name}: rate-limited, retrying in {wait}s...")
+            time.sleep(wait)
+        else:
+            print(f"  \u2717 {agent_name}: PATCH failed {patch_resp.status_code} {patch_resp.text[:200]}")
+            break
+    else:
+        print(f"  \u2717 {agent_name}: failed after 3 retries (429)")
+
+print("\n\u2705 Step 9 complete:")
+print("   Entity matching enabled on categorical string columns.")
+print("   Genie can now fuzzy-match: 'West'\u2192'Western', 'online'\u2192'Online',")
+print("   'asia'\u2192'Asia', 'fulfilled'\u2192'Fulfilled', etc.")
 
 # COMMAND ----------
 
@@ -7724,11 +7881,57 @@ print(f"\n{'='*90}")
 # MAGIC | Stage | PASS | Confidence Profile |
 # MAGIC | --- | --- | --- |
 # MAGIC | Baseline | 28/45 | Mostly INFERRED |
-# MAGIC | After Iteration 1 | 37/45 | +HEURISTIC (comments/examples) |
-# MAGIC | After Iteration 2 | 41/45 | +DETERMINISTIC (metric views) |
+# MAGIC | After Iteration 1 | 35/45 | +HEURISTIC (comments/examples) |
+# MAGIC | After Iteration 2 | 40/45 | +DETERMINISTIC (metric views) |
 # MAGIC | After Iteration 3 | **45/45** | Mostly DETERMINISTIC (SQL functions, reference tables) |
 # MAGIC
-# MAGIC ### Notebook Structure (33 cells)
+# MAGIC ### Provenance Map: Which UC Feature Fixed Which Test
+# MAGIC
+# MAGIC 28 tests pass at baseline from raw column/table names alone (INFERRED). The 17 that fail require specific UC governance features. 2 tests (P03, P04) regressed in Iter 1 due to safeguard instructions, then recovered later.
+# MAGIC
+# MAGIC #### Iteration 1: Column Comments + Example SQL + Benchmarks (28 → 35)
+# MAGIC
+# MAGIC | Test | Metric | Baseline Error | Specific UC Feature | Confidence |
+# MAGIC | --- | --- | --- | --- | --- |
+# MAGIC | A02 | Late delivery rate (94.57) | `origin_region OR destination_region` → 84.97% | **Example SQL** on logistics: taught `destination_region = 'Western'` + `ship_date` filter | HEURISTIC |
+# MAGIC | A03 | Avg delay days (2.94) | Extra origin filter → 2.58 | **Example SQL** on logistics: taught `AVG(CASE WHEN is_late THEN delay_days END)` with `destination_region` | HEURISTIC |
+# MAGIC | B03 | Revenue change $ (-1,240,330) | Wrong sign → +1,174,078 | **Column Comment** `sales_orders.total_amount` = "Total order value" + date safeguard instructions | HEURISTIC |
+# MAGIC | D04 | Avg LTV overall (8.69) | Used `supplier_lead_times` (pre-agg) → 9.0 | **Example SQL** on supplier: taught `supplier_orders` for lead time variance | HEURISTIC |
+# MAGIC | D06 | Avg LTV Asia (13.67) | Used `supplier_lead_times` → 18.0 | **Example SQL** on supplier: `supplier_orders WHERE supplier_continent = 'Asia'` | HEURISTIC |
+# MAGIC | F02 | Vendor late % (75.0) | Per-vendor (81%) not per-order | **Example SQL** on supplier: taught per-order COUNT pattern | HEURISTIC |
+# MAGIC | F06 | Worst product family (349,063) | Wrong comparison direction | **Example SQL** on demand: `Aug vs Jul` per `product_family ORDER BY ASC LIMIT 1` | HEURISTIC |
+# MAGIC | H01 | Europe LTV (0.38) | Wrong table → -0.4 | **Column Comments** + **Safeguard Instructions**: "Use `supplier_orders` for per-order metrics" | HEURISTIC |
+# MAGIC | H02 | NA LTV (0.4) | Wrong table → 0.85 | **Column Comments** + **Safeguard Instructions**: same table disambiguation | HEURISTIC |
+# MAGIC | P03 | Inventory risk (106) | **Regressed** from PASS(106) to FAIL(100) | Safeguard instructions disrupted raw inference. Recovered in Iter 2. | (regressed) |
+# MAGIC | P04 | Procurement quality (11) | **Regressed** from PASS(11) to FAIL(-12) | Safeguard instructions disrupted raw inference. Fixed by SQL Function in Iter 3. | (regressed) |
+# MAGIC
+# MAGIC #### Iteration 2: Metric Views + Governed Tags + CoD View (35 → 40)
+# MAGIC
+# MAGIC | Test | Metric | Iter 1 Error | Specific UC Feature | Confidence |
+# MAGIC | --- | --- | --- | --- | --- |
+# MAGIC | E03 | CoD Western ($3,757,298) | No cross-domain table → $3.34M | **Open Knowledge View** `cost_of_disruption_by_region`: joins demand + logistics + supplier schemas | DETERMINISTIC |
+# MAGIC | H05 | Revenue at risk ($3,138,570) | No single agent has demand + logistics | **Open Knowledge View** `cost_of_disruption_by_region.revenue_at_risk` column | DETERMINISTIC |
+# MAGIC | H06 | Stockout revenue ($14,369) | Cross-domain → wrong (15,965) | **Metric View** `inventory_safety_stock_metrics`: pre-computed join with correct grain | DETERMINISTIC |
+# MAGIC | H07 | CoD/revenue ratio (1.12) | Guessed 1.0 | **Open Knowledge View** `cost_of_disruption_by_region.disruption_to_revenue_ratio` pre-computed | DETERMINISTIC |
+# MAGIC | P03 | Inventory risk (106) | Regressed in Iter 1 (100) | **Recovered**: metric view stability restored correct multi-condition query | DETERMINISTIC |
+# MAGIC
+# MAGIC #### Iteration 3: SQL Functions + fiscal_targets (40 → 45/45)
+# MAGIC
+# MAGIC | Test | Metric | Iter 2 Error | Specific UC Feature | Confidence |
+# MAGIC | --- | --- | --- | --- | --- |
+# MAGIC | G01 | Q1 target at risk? (92.0) | Guessed 94.6% | **Reference Table** `reporting.fiscal_targets`: Q1=Jul-Sep, target=92.0% | DETERMINISTIC |
+# MAGIC | G02 | Q1 target value (92.0) | Guessed 82.0% | **Reference Table** `reporting.fiscal_targets` | DETERMINISTIC |
+# MAGIC | P01 | Logistics Risk (176) | Guessed -167 | **SQL Function** `get_critical_delay_shipments()`: `delay_days >= 5 AND total_weight_kg > 800` | DETERMINISTIC |
+# MAGIC | P02 | Demand Anomaly (77) | Guessed 74.1 | **SQL Function** `get_critical_accuracy_forecasts()`: `qty >= 8 AND price < 30 AND channel='Online'` | DETERMINISTIC |
+# MAGIC | P04 | Procurement Quality (11) | Guessed -12 | **SQL Function** `get_critical_quality_orders()`: `quality_score < 75 AND ltv > 12` | DETERMINISTIC |
+# MAGIC
+# MAGIC #### Reliability Assessment
+# MAGIC
+# MAGIC * **HEURISTIC (Iter 1)**: Likely repeatable but guidance-based. Agent may bypass Example SQL patterns if question is rephrased significantly.
+# MAGIC * **DETERMINISTIC (Iter 2-3)**: Highly reliable. Metric views are pre-computed, SQL functions return explicit definitions, reference table has exact values. Cannot drift.
+# MAGIC * **P05**: Always passed at baseline (agent guessed the 3-condition threshold correctly by coincidence). Became DETERMINISTIC in Iter 3 when `get_critical_disruption_regions()` was added — same answer, now governed.
+# MAGIC
+# MAGIC ### Notebook Structure (34 cells)
 # MAGIC
 # MAGIC * Cells 1-5: Title, Parameters, Setup, Teardown, Build (data + agents)
 # MAGIC * Cell 6: Test Suite definitions (markdown) → Cell 7: BASELINE (45 tests)
@@ -7736,16 +7939,16 @@ print(f"\n{'='*90}")
 # MAGIC * Cell 9: Iteration 1 approach (markdown) → Cell 10: ITERATION 1 → Cell 11: VISUAL After Iter 1
 # MAGIC * Cell 12: Iteration 2 approach (markdown) → Cell 13: ITERATION 2 → Cell 14: VISUAL After Iter 2
 # MAGIC * Cell 15: Iteration 3 approach (markdown) → Cell 16: PRE-STEP fiscal_targets → Cell 17: Kernel Recovery → Cell 18: Manual Step (markdown) → Cell 19: ITERATION 3 SETUP
-# MAGIC * Cell 20: STEP 8 ai_forecast capability → Cell 21: ITERATION 3 test suite run
-# MAGIC * Cell 22: **Reasoning Confidence definitions** (markdown) → Cell 23: VISUAL After Iter 3 (Final)
-# MAGIC * Cell 24: **Deep Reliability Analysis definitions** (markdown)
-# MAGIC * Cell 25: **Robustness Test definitions** (markdown)
-# MAGIC * Cell 26: **Comprehensive Prompt Benchmark definitions** (markdown)
-# MAGIC * Cell 27: DEEP RELIABILITY ANALYSIS → Cell 28: ROBUSTNESS TEST → Cell 29: COMPREHENSIVE PROMPT BENCHMARK
-# MAGIC * Cell 30: Current Status and Findings (this cell)
-# MAGIC * Cell 31: Teardown (delete non-Iter-3 agents)
-# MAGIC * Cell 32: **Supervisor Agent vs Genie One** comparison report (markdown)
-# MAGIC * Cell 33: MANUAL STEP Delete UC Domain (markdown)
+# MAGIC * Cell 20: STEP 8 ai_forecast capability → Cell 21: STEP 9 entity matching on key string columns → Cell 22: ITERATION 3 test suite run
+# MAGIC * Cell 23: **Reasoning Confidence definitions** (markdown) → Cell 24: VISUAL After Iter 3 (Final)
+# MAGIC * Cell 25: **Deep Reliability Analysis definitions** (markdown)
+# MAGIC * Cell 26: **Robustness Test definitions** (markdown)
+# MAGIC * Cell 27: **Comprehensive Prompt Benchmark definitions** (markdown)
+# MAGIC * Cell 28: DEEP RELIABILITY ANALYSIS → Cell 29: ROBUSTNESS TEST → Cell 30: COMPREHENSIVE PROMPT BENCHMARK
+# MAGIC * Cell 31: Current Status and Findings (this cell)
+# MAGIC * Cell 32: Teardown (delete non-Iter-3 agents)
+# MAGIC * Cell 33: **Supervisor Agent vs Genie One** comparison report (markdown)
+# MAGIC * Cell 34: MANUAL STEP Delete UC Domain (markdown)
 
 # COMMAND ----------
 
