@@ -1,0 +1,11 @@
+command:
+  - python
+  - app.py
+
+env:
+  - name: CATALOG_NAME
+    value: GAP_Demo_Dev
+  - name: WAREHOUSE_ID
+    value: bf50738cf2819197
+
+source_code_path: /Workspace/Users/ssuman@bpcs.com/GAP_genie_multiagent_datanalysis_demo/src/genie-curator-workbench
