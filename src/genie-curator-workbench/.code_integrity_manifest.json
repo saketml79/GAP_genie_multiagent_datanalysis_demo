@@ -1,0 +1,116 @@
+{
+  "generated_at": "2026-10-06T22:24:13Z",
+  "reason": "Session 14h: all fixes + col progress + tbl_ok shadow fix",
+  "critical_invariants": {
+    "main.py": {
+      "line_count_range": [
+        3319,
+        3359
+      ],
+      "must_contain": [
+        "discover_agents(headers=obo_headers)",
+        "discover_supervisors(headers=obo_headers)",
+        "ABORT benchmark: no agents",
+        "Benchmark starting:",
+        "def _run_bench_bg(label, obo_headers):",
+        "def _run_setup_bg(obo_headers):",
+        "def discover_agents(headers=None):",
+        "def _discover_all(retries=1, headers=None):",
+        "def ask_genie(space_id, question, headers=None",
+        "from iterations import run_iteration_1",
+        "def _run_iter_setup_bg(tok, key, run_fn, obo_h, on_success):",
+        "def _test_one(idx, aid, agent_key, question, exp):",
+        "GLOBAL LOCK: block tab switching",
+        "_app_busy = any([ST.get(\"bench_running\")",
+        ".nav-btn:disabled",
+        "def select_test",
+        "def render_test_modal",
+        "results[idx][\"answer\"]",
+        ".modal-backdrop"
+      ],
+      "must_not_contain": [
+        "ST[\"agents\"] = discover_agents()\n                    ST[\"supervisors\"]"
+      ],
+      "function_count": 95
+    },
+    "iterations.py": {
+      "line_count_range": [
+        520,
+        540
+      ],
+      "must_contain": [
+        "def ensure_sorted_payload(ss):",
+        "def _run_comment_sql(host, headers, warehouse_id, statement",
+        "def _apply_comments_via_sql(host, headers, catalog, warehouse_id",
+        "def clone_agents(host, headers, source_spaces, iteration_label",
+        "def update_supervisor_tools(host, headers, spaces):",
+        "def _patch_agent_instructions(",
+        "def _add_example_sqls(",
+        "def _add_benchmarks(",
+        "def run_iteration_1(host, headers, catalog, warehouse_id, discover_agents_fn",
+        "COMMENT ON TABLE",
+        "ALTER VIEW",
+        "ITER1_TABLE_COMMENTS",
+        "ITER1_COLUMN_COMMENTS",
+        "if tbl_ok == 0:",
+        "if instr_ok == 0:",
+        "if esql_ok == 0:",
+        "existing[agent_name] = s[\"space_id\"]"
+      ],
+      "function_count": 11
+    }
+  },
+  "files": {
+    "Gap_workshp_.html": {
+      "sha256": "7da626ef4bd5570df63649371b1d0b503e5f339b15ec7d4798ed4460d1c81e3d",
+      "size": 508598
+    },
+    "app.py": {
+      "sha256": "e1bb2cd3e9be2663d95ed8713ab45de6d1a8eaa707aa787747c4958a47c1f6a2",
+      "size": 62073,
+      "line_count": 1250,
+      "function_count": 31
+    },
+    "app.yaml": {
+      "sha256": "0f3be90dee986cdc441bc7c69ee94cfcd3f651d29844f6e0537e92d1f145d7ba",
+      "size": 751
+    },
+    "design.md": {
+      "sha256": "50b803d0c37615d9e058185d43fdba7d4e3d5f22297f6387f754c2f3f6b99f89",
+      "size": 15802
+    },
+    "geniecode.md": {
+      "sha256": "4602cdfd607b6dc11d762c50b245281c77f1ad6ebeaf072a039f3266fd82e534",
+      "size": 8455
+    },
+    "iterations.py": {
+      "sha256": "6da419e76ffcd3202cac8d46357507cd2af5e8ff73a237e28842f34ae30615cc",
+      "size": 33127,
+      "line_count": 533,
+      "function_count": 11
+    },
+    "main.py": {
+      "sha256": "041e5ccbd1cb878b8e837821bc936bcda1df98a6cbb0b633ae1d90bef19f2ed6",
+      "size": 166551,
+      "line_count": 3339,
+      "function_count": 99
+    },
+    "product.md": {
+      "sha256": "b2dae12dbb5c95d1cc148e7dd403107b0fb7054ded9245fb194befd4f01a5710",
+      "size": 10644
+    },
+    "requirements.txt": {
+      "sha256": "411eb1d754f9aa5b07ff94eb50d1c0f1d2b520e590c370821f421d7eb5afac4e",
+      "size": 121
+    },
+    "rules.md": {
+      "sha256": "d6de1615430cbce42db3c0269e75c5315a8eacf13fc8e1bfc50dfeb4005df173",
+      "size": 9561
+    },
+    "test.md": {
+      "sha256": "235e0f33a934efcac1faa31e22e252076e992d686cd2c755c3d6f3c125f08dc8",
+      "size": 9203
+    }
+  },
+  "timestamp": "2026-10-06T23:05:17Z"
+}

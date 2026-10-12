@@ -15,7 +15,7 @@ import requests
 
 # ── Config ────────────────────────────────────────────────────────────────
 CATALOG = os.getenv("CATALOG_NAME", "GAP_Demo_Dev")
-WAREHOUSE_ID = os.getenv("WAREHOUSE_ID", "bf50738cf2819197")
+WAREHOUSE_ID = os.getenv("WAREHOUSE_ID", "e3a0fc2c08db05bb")
 
 # Auth via Databricks App OAuth
 try:
@@ -332,10 +332,10 @@ app = dash.Dash(
     suppress_callback_exceptions=True,
     title="Genie Curator Workbench",
 )
+server = app.server  # for gunicorn if needed
 
 # ── Custom CSS injection ─────────────────────────────────────────────────
 CUSTOM_CSS = f"""
-@import url('{FONTS}');
 :root {{
   --bg:{CSS_VARS['bg']}; --surface:{CSS_VARS['surface']}; --soft:{CSS_VARS['soft']};
   --ink:{CSS_VARS['ink']}; --muted:{CSS_VARS['muted']}; --line:{CSS_VARS['line']};
@@ -381,6 +381,26 @@ h3 {{ font-family:var(--display) !important; font-weight:600 !important; }}
 .progress-fill {{ height:100%; border-radius:99px; transition:width .6s ease; }}
 """
 
+# Inject CSS via index_string (html.Style doesn't exist in Dash)
+# NOTE: Dash template markers use SINGLE braces {%metas%}, not double
+_CSS_BLOCK = '<style>' + CUSTOM_CSS + '</style>'
+app.index_string = (
+    '<!DOCTYPE html>\n<html>\n<head>\n'
+    '    {%metas%}\n'
+    '    <title>{%title%}</title>\n'
+    '    {%favicon%}\n'
+    '    {%css%}\n'
+    '    ' + _CSS_BLOCK + '\n'
+    '</head>\n<body>\n'
+    '    {%app_entry%}\n'
+    '    <footer>\n'
+    '        {%config%}\n'
+    '        {%scripts%}\n'
+    '        {%renderer%}\n'
+    '    </footer>\n'
+    '</body>\n</html>'
+)
+
 # Plotly dark template matching the theme
 PLOTLY_TEMPLATE = go.layout.Template(
     layout=go.Layout(
@@ -412,11 +432,13 @@ def make_header():
 
 def make_nav():
     tabs = [
-        ("dashboard", "\ud83d\udcca Dashboard"),
-        ("benchmark", "\ud83e\uddea Benchmark"),
-        ("comparison", "\u2696\ufe0f Comparison"),
-        ("agents", "\ud83e\udd16 Agents"),
-        ("logs", "\ud83d\udcdd Logs"),
+        ("dashboard", "1. Overview"),
+        ("setup", "2. Setup & Teardown"),
+        ("benchmark", "3. Baseline (45 Tests)"),
+        ("iterations", "4. Iterations"),
+        ("comparison", "5. Comparison"),
+        ("agents", "6. Agents"),
+        ("logs", "7. Logs"),
     ]
     return html.Div([
         html.Button(label, id={"type": "nav-tab", "index": tid}, n_clicks=0,
@@ -439,7 +461,6 @@ def make_metric_tile(value, label, status=None):
 
 # ── Main Layout ───────────────────────────────────────────────────────────
 app.layout = html.Div([
-    html.Style(CUSTOM_CSS),
     make_header(),
     make_nav(),
     html.Div(id="page-content", style={"maxWidth": "1200px", "margin": "0 auto", "padding": "24px"}),
@@ -469,8 +490,12 @@ def switch_tab(clicks):
 def render_page(tab):
     if tab == "dashboard":
         return render_dashboard()
+    elif tab == "setup":
+        return render_setup()
     elif tab == "benchmark":
         return render_benchmark()
+    elif tab == "iterations":
+        return render_iterations()
     elif tab == "comparison":
         return render_comparison()
     elif tab == "agents":
@@ -551,6 +576,337 @@ def render_dashboard():
             ], className="table-dark"),
         ], className="card"),
     ])
+
+
+# ── Page: Setup & Teardown ───────────────────────────────────────────────
+def render_setup():
+    SRC_DIR = "/Workspace/Users/ssuman@bpcs.com/GAP_genie_multiagent_datanalysis_demo/src"
+    return html.Div([
+        html.H2("Setup & Teardown", style={"marginBottom": "8px"}),
+        html.P("Mirror of the notebook workflow: teardown existing resources, then rebuild everything.",
+               style={"color": CSS_VARS["muted"], "marginBottom": "24px"}),
+
+        # Teardown section
+        html.Div([
+            html.H3("Teardown", style={"marginBottom": "12px", "color": CSS_VARS["rose"]}),
+            html.P("Delete agents from previous iterations, drop schemas, clean up.",
+                   style={"color": CSS_VARS["muted"], "fontSize": "14px", "marginBottom": "16px"}),
+            html.Div([
+                html.Button("Delete Non-Iter-3 Agents", id="btn-teardown-agents", className="btn-outline",
+                            style={"borderColor": CSS_VARS["rose"], "color": CSS_VARS["rose"]}),
+                html.Button("Delete ALL Agents", id="btn-teardown-all-agents", className="btn-outline",
+                            style={"borderColor": CSS_VARS["rose"], "color": CSS_VARS["rose"]}),
+                html.Button("Delete Supervisors", id="btn-teardown-supervisors", className="btn-outline",
+                            style={"borderColor": CSS_VARS["rose"], "color": CSS_VARS["rose"]}),
+                html.Button("Drop Catalog Schemas", id="btn-teardown-schemas", className="btn-outline",
+                            style={"borderColor": CSS_VARS["rose"], "color": CSS_VARS["rose"]}),
+            ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap"}),
+            html.Div(id="teardown-status", style={"marginTop": "16px"}),
+        ], className="card", style={"marginBottom": "24px"}),
+
+        # Setup section
+        html.Div([
+            html.H3("Setup (Steps 1-8)", style={"marginBottom": "12px", "color": CSS_VARS["teal"]}),
+            html.P("Run the setup notebooks to create catalog, generate data, and create agents.",
+                   style={"color": CSS_VARS["muted"], "fontSize": "14px", "marginBottom": "16px"}),
+            html.Div([
+                html.Div([
+                    html.Div("Step", style={"fontWeight": "600", "width": "60px"}),
+                    html.Div("Notebook", style={"fontWeight": "600", "flex": "1"}),
+                    html.Div("Description", style={"fontWeight": "600", "flex": "2", "color": CSS_VARS["muted"]}),
+                ], style={"display": "flex", "gap": "12px", "padding": "8px 0", "borderBottom": f"1px solid {CSS_VARS['line']}",
+                          "fontSize": "12px", "textTransform": "uppercase", "letterSpacing": ".05em", "color": CSS_VARS["muted"]}),
+                *[html.Div([
+                    html.Div(f"{i+1}", style={"width": "60px", "fontFamily": "var(--mono)", "fontWeight": "600"}),
+                    html.Div(html.Code(name), style={"flex": "1", "fontSize": "13px"}),
+                    html.Div(desc, style={"flex": "2", "color": CSS_VARS["muted"], "fontSize": "14px"}),
+                ], style={"display": "flex", "gap": "12px", "padding": "10px 0", "borderBottom": f"1px solid {CSS_VARS['line']}",
+                          "alignItems": "center"})
+                for i, (name, desc) in enumerate([
+                    ("01_create_catalog_schemas", "Create catalog and all domain schemas"),
+                    ("02_generate_demand_data", "Generate deterministic demand/sales data"),
+                    ("03_generate_inventory_data", "Generate inventory ledger data"),
+                    ("04_generate_logistics_data", "Generate shipments and logistics data"),
+                    ("05_generate_supplier_data", "Generate supplier orders and SLA data"),
+                    ("06_create_reporting_views", "Create executive reporting views + CoD view"),
+                    ("07_add_all_comments", "Add column/table comments to all tables"),
+                    ("08_setup_genie_supervisor", "Create 5 Genie Agents + Supervisor + Evaluator"),
+                ])],
+            ]),
+            html.Div([
+                html.Button("\u25b6 Run Full Setup (Steps 1-8)", id="btn-run-setup", className="btn-primary",
+                            style={"marginTop": "16px"}),
+                html.Span(f"Source: {SRC_DIR}", style={"color": CSS_VARS["muted"], "fontSize": "12px",
+                           "fontFamily": "var(--mono)", "marginLeft": "12px"}),
+            ], style={"display": "flex", "alignItems": "center"}),
+            html.Div(id="setup-status", style={"marginTop": "16px"}),
+        ], className="card"),
+    ])
+
+
+@callback(
+    Output("teardown-status", "children"),
+    Input("btn-teardown-agents", "n_clicks"),
+    Input("btn-teardown-all-agents", "n_clicks"),
+    Input("btn-teardown-supervisors", "n_clicks"),
+    Input("btn-teardown-schemas", "n_clicks"),
+    prevent_initial_call=True,
+)
+def handle_teardown(n1, n2, n3, n4):
+    triggered = ctx.triggered_id
+    headers = get_headers()
+    results = []
+
+    if triggered == "btn-teardown-agents":
+        # Delete agents NOT from Iteration 3 or Evaluator
+        resp = requests.get(f"{HOST}/api/2.0/genie/spaces", headers=headers)
+        deleted = 0
+        for s in resp.json().get("spaces", []):
+            title = s.get("title", "")
+            if "SC" not in title:
+                continue
+            if "Iteration 3" in title or "Evaluator" in title:
+                continue
+            dr = requests.delete(f"{HOST}/api/2.0/genie/spaces/{s['space_id']}", headers=headers)
+            if dr.status_code in (200, 204):
+                results.append(f"Deleted: {title}")
+                deleted += 1
+        log(f"Teardown: deleted {deleted} non-Iter-3 agents")
+        return html.Div([
+            html.Span(f"\u2713 Deleted {deleted} agents (preserved Iteration 3 + Evaluator)",
+                      style={"color": CSS_VARS["teal"]}),
+            *[html.Div(r, style={"fontSize": "13px", "color": CSS_VARS["muted"], "fontFamily": "var(--mono)"})
+              for r in results],
+        ])
+
+    elif triggered == "btn-teardown-all-agents":
+        resp = requests.get(f"{HOST}/api/2.0/genie/spaces", headers=headers)
+        deleted = 0
+        for s in resp.json().get("spaces", []):
+            title = s.get("title", "")
+            if "SC" not in title:
+                continue
+            dr = requests.delete(f"{HOST}/api/2.0/genie/spaces/{s['space_id']}", headers=headers)
+            if dr.status_code in (200, 204):
+                results.append(f"Deleted: {title}")
+                deleted += 1
+        log(f"Teardown: deleted ALL {deleted} SC agents")
+        return html.Div([
+            html.Span(f"\u2713 Deleted ALL {deleted} SC agents",
+                      style={"color": CSS_VARS["rose"]}),
+        ])
+
+    elif triggered == "btn-teardown-supervisors":
+        resp = requests.get(f"{HOST}/api/2.1/supervisor-agents", headers=headers)
+        deleted = 0
+        for s in resp.json().get("supervisor_agents", []):
+            if "Supply Chain" in s.get("display_name", ""):
+                dr = requests.delete(f"{HOST}/api/2.1/{s['name']}", headers=headers)
+                if dr.status_code in (200, 204):
+                    results.append(f"Deleted: {s['display_name']}")
+                    deleted += 1
+        log(f"Teardown: deleted {deleted} supervisors")
+        return html.Div([
+            html.Span(f"\u2713 Deleted {deleted} supervisors",
+                      style={"color": CSS_VARS["rose"]}),
+        ])
+
+    elif triggered == "btn-teardown-schemas":
+        # Use SQL via the Databricks SQL connector
+        try:
+            from databricks import sql as dbsql
+            conn = dbsql.connect(server_hostname=HOST.replace("https://", ""),
+                                 http_path=f"/sql/1.0/warehouses/{WAREHOUSE_ID}",
+                                 credentials_provider=lambda: get_headers())
+            cursor = conn.cursor()
+            schemas = ["demand_analysis", "inventory_management", "logistics_operations",
+                       "supplier_procurement", "reporting", "action_intelligence"]
+            for schema in schemas:
+                try:
+                    cursor.execute(f"DROP SCHEMA IF EXISTS {CATALOG}.{schema} CASCADE")
+                    results.append(f"Dropped: {CATALOG}.{schema}")
+                except Exception as e:
+                    results.append(f"Failed: {CATALOG}.{schema} - {str(e)[:80]}")
+            cursor.close()
+            conn.close()
+            log(f"Teardown: dropped {len(schemas)} schemas")
+        except Exception as e:
+            results.append(f"SQL connection failed: {str(e)[:120]}")
+        return html.Div([
+            html.Span(f"\u2713 Schema teardown complete", style={"color": CSS_VARS["rose"]}),
+            *[html.Div(r, style={"fontSize": "13px", "color": CSS_VARS["muted"], "fontFamily": "var(--mono)"})
+              for r in results],
+        ])
+
+    return no_update
+
+
+@callback(
+    Output("setup-status", "children"),
+    Input("btn-run-setup", "n_clicks"),
+    prevent_initial_call=True,
+)
+def handle_setup(n):
+    # Trigger the 00_run_all notebook via Jobs API (one-time run)
+    headers = get_headers()
+    notebook_path = "/Users/ssuman@bpcs.com/GAP_genie_multiagent_datanalysis_demo/src/notebooks/Supply Chain Control Tower Curator Workbench"
+    log("Setup: submitting one-time notebook run via Jobs API...")
+
+    run_resp = requests.post(
+        f"{HOST}/api/2.1/jobs/runs/submit",
+        headers=headers,
+        json={
+            "run_name": "Curator Workbench Setup",
+            "tasks": [{
+                "task_key": "setup",
+                "notebook_task": {
+                    "notebook_path": notebook_path,
+                    "base_parameters": {
+                        "catalog_name": CATALOG,
+                        "warehouse_id": WAREHOUSE_ID,
+                        "run_mode": "full",
+                    },
+                },
+                "new_cluster": {
+                    "spark_version": "15.4.x-scala2.12",
+                    "num_workers": 0,
+                    "node_type_id": "Standard_DS3_v2",
+                    "data_security_mode": "SINGLE_USER",
+                },
+            }],
+        },
+    )
+
+    if run_resp.status_code == 200:
+        run_id = run_resp.json().get("run_id")
+        log(f"Setup: run submitted, run_id={run_id}")
+        return html.Div([
+            html.Span(f"\u2713 Setup run submitted (run_id: {run_id})",
+                      style={"color": CSS_VARS["teal"]}),
+            html.P("The notebook is running in the background. Monitor via Jobs.",
+                   style={"color": CSS_VARS["muted"], "fontSize": "14px", "marginTop": "8px"}),
+        ])
+    else:
+        err = run_resp.text[:200]
+        log(f"Setup failed: {err}")
+        return html.Div([
+            html.Span(f"\u2717 Setup failed: {err}", style={"color": CSS_VARS["rose"]}),
+        ])
+
+
+# ── Page: Iterations ────────────────────────────────────────────────────
+def render_iterations():
+    return html.Div([
+        html.H2("Iteration Workflow", style={"marginBottom": "8px"}),
+        html.P("Progressive UC semantic improvements: 62% -> 77% -> 88% -> 100%.",
+               style={"color": CSS_VARS["muted"], "marginBottom": "24px"}),
+
+        # Iteration 1
+        html.Div([
+            html.Div([
+                html.H3("Iteration 1: Column Comments + Example SQL", style={"marginBottom": "4px"}),
+                html.P("Add business-friendly column descriptions and example SQL queries to steer agents toward metric views.",
+                       style={"color": CSS_VARS["muted"], "fontSize": "14px"}),
+            ]),
+            html.Div([
+                html.Div("28/45 \u2192 35/45", className="chip pass", style={"fontSize": "16px", "fontWeight": "700"}),
+                html.Span("Fixes: A02, A03, B03, D04, D06, F02, F06",
+                          style={"color": CSS_VARS["muted"], "fontSize": "13px"}),
+            ], style={"display": "flex", "gap": "12px", "alignItems": "center", "marginTop": "12px"}),
+            html.Button("Apply Iteration 1 + Run Tests", id="btn-iter1", className="btn-outline",
+                        style={"marginTop": "12px"}),
+            html.Div(id="iter1-status", style={"marginTop": "8px"}),
+        ], className="card", style={"marginBottom": "16px"}),
+
+        # Iteration 2
+        html.Div([
+            html.Div([
+                html.H3("Iteration 2: Metric Views + CoD View", style={"marginBottom": "4px"}),
+                html.P("Create pre-computed metric views for delivery, revenue, inventory, supplier, and Cost of Disruption.",
+                       style={"color": CSS_VARS["muted"], "fontSize": "14px"}),
+            ]),
+            html.Div([
+                html.Div("35/45 \u2192 40/45", className="chip pass", style={"fontSize": "16px", "fontWeight": "700"}),
+                html.Span("Fixes: E03, H05, H06, H07, P03",
+                          style={"color": CSS_VARS["muted"], "fontSize": "13px"}),
+            ], style={"display": "flex", "gap": "12px", "alignItems": "center", "marginTop": "12px"}),
+            html.Button("Apply Iteration 2 + Run Tests", id="btn-iter2", className="btn-outline",
+                        style={"marginTop": "12px"}),
+            html.Div(id="iter2-status", style={"marginTop": "8px"}),
+        ], className="card", style={"marginBottom": "16px"}),
+
+        # Iteration 3
+        html.Div([
+            html.Div([
+                html.H3("Iteration 3: SQL Functions + Fiscal Targets + Supervisor Enhancement",
+                         style={"marginBottom": "4px"}),
+                html.P("Add SQL threshold functions, fiscal_targets table, ai_forecast capability, and entity matching.",
+                       style={"color": CSS_VARS["muted"], "fontSize": "14px"}),
+            ]),
+            html.Div([
+                html.Div("40/45 \u2192 45/45", className="chip pass", style={"fontSize": "16px", "fontWeight": "700"}),
+                html.Span("Fixes: G01, G02, P01, P02, P04",
+                          style={"color": CSS_VARS["muted"], "fontSize": "13px"}),
+            ], style={"display": "flex", "gap": "12px", "alignItems": "center", "marginTop": "12px"}),
+            html.Button("Apply Iteration 3 + Run Tests", id="btn-iter3", className="btn-outline",
+                        style={"marginTop": "12px"}),
+            html.Div(id="iter3-status", style={"marginTop": "8px"}),
+        ], className="card", style={"marginBottom": "16px"}),
+
+        # Progression chart
+        html.Div([
+            html.H3("Progression", style={"marginBottom": "12px"}),
+            dcc.Graph(
+                figure=go.Figure(
+                    data=[
+                        go.Bar(x=["Baseline", "Iter 1", "Iter 2", "Iter 3"],
+                               y=[28, 35, 40, 45],
+                               marker_color=[CSS_VARS["rose"], "#F59E0B", CSS_VARS["indigo"], CSS_VARS["teal"]],
+                               text=["28/45\n62%", "35/45\n77%", "40/45\n88%", "45/45\n100%"],
+                               textposition="outside", textfont=dict(size=13, color=CSS_VARS["ink"])),
+                    ],
+                    layout=go.Layout(
+                        template=PLOTLY_TEMPLATE,
+                        height=300, margin=dict(t=40, b=30),
+                        yaxis=dict(range=[0, 50], title="Tests Passing"),
+                        title="45-Test Suite Progression Across Iterations",
+                    ),
+                ),
+                config={"displayModeBar": False},
+            ),
+        ], className="card"),
+    ])
+
+
+@callback(
+    Output("iter1-status", "children"),
+    Input("btn-iter1", "n_clicks"),
+    prevent_initial_call=True,
+)
+def handle_iter1(n):
+    log("Iteration 1: Would clone agents and apply column comments + example SQL")
+    return html.Span("Iteration 1 workflow not yet wired (requires agent cloning + PATCH API calls)",
+                     style={"color": CSS_VARS["muted"], "fontSize": "13px"})
+
+@callback(
+    Output("iter2-status", "children"),
+    Input("btn-iter2", "n_clicks"),
+    prevent_initial_call=True,
+)
+def handle_iter2(n):
+    log("Iteration 2: Would create metric views + CoD view + update agents")
+    return html.Span("Iteration 2 workflow not yet wired (requires SQL DDL + agent PATCH)",
+                     style={"color": CSS_VARS["muted"], "fontSize": "13px"})
+
+@callback(
+    Output("iter3-status", "children"),
+    Input("btn-iter3", "n_clicks"),
+    prevent_initial_call=True,
+)
+def handle_iter3(n):
+    log("Iteration 3: Would create SQL functions + fiscal_targets + update supervisor")
+    return html.Span("Iteration 3 workflow not yet wired (requires SQL DDL + supervisor API)",
+                     style={"color": CSS_VARS["muted"], "fontSize": "13px"})
 
 
 # ── Page: Benchmark ──────────────────────────────────────────────────────
@@ -889,4 +1245,5 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"Startup discovery failed: {e}")
 
-    app.run(host="0.0.0.0", port=8050, debug=False)
+    port = int(os.getenv("DATABRICKS_APP_PORT", "8000"))
+    app.run(host="0.0.0.0", port=port, debug=False)

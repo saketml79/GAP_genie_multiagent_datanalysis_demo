@@ -1,0 +1,27 @@
+resources:
+  jobs:
+    curator_iter1_supervisor:
+      name: "Curator Workbench: Iteration 1 Supervisor"
+      description: "Points the Supply Chain Control Tower Supervisor at the Iteration 1 agents. Triggered by the Curator Workbench app; runs as the deploying user."
+      max_concurrent_runs: 1
+      run_as:
+        user_name: ${workspace.current_user.userName}
+      permissions:
+        - service_principal_name: c188e666-d3b4-4784-8f3a-00915fdd03fe
+          level: CAN_MANAGE_RUN
+      environments:
+        - environment_key: Default
+          spec:
+            client: "2"
+      tasks:
+        - task_key: refresh_supervisor
+          environment_key: Default
+          spark_python_task:
+            python_file: ../src/genie-curator-workbench/iterations.py
+            parameters:
+              - --mode
+              - supervisor-job
+              - --iteration
+              - "1"
+              - --catalog
+              - ${var.catalog_name}

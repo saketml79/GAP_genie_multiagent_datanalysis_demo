@@ -122,7 +122,7 @@
 
 # DBTITLE 1,Parameters
 dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
-dbutils.widgets.text("warehouse_id", "bf50738cf2819197", "SQL Warehouse ID")
+dbutils.widgets.text("warehouse_id", "e3a0fc2c08db05bb", "SQL Warehouse ID")
 dbutils.widgets.dropdown("run_mode", "full", ["full", "skip_teardown", "iterations_only"], "Run Mode")
 
 CATALOG = dbutils.widgets.get("catalog_name")

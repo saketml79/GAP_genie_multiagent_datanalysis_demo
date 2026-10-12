@@ -21,7 +21,7 @@ targets:
     mode: development
     variables:
       catalog_name: GAP_Demo_Dev
-      warehouse_id: "bf50738cf2819197"
+      warehouse_id: "e3a0fc2c08db05bb"
     workspace:
       host: https://adb-1866518241053589.9.azuredatabricks.net
 

@@ -16,7 +16,7 @@ st.set_page_config(
 
 APP_VERSION = "v6-interactions"
 CATALOG = os.getenv("CATALOG", "GAP_Demo_Dev")
-WAREHOUSE_ID = os.getenv("WAREHOUSE_ID", "bf50738cf2819197")
+WAREHOUSE_ID = os.getenv("WAREHOUSE_ID", "e3a0fc2c08db05bb")
 HTTP_PATH = f"/sql/1.0/warehouses/{WAREHOUSE_ID}"
 SERVER_HOSTNAME = os.getenv(
     "DATABRICKS_HOST",
@@ -180,13 +180,24 @@ h1,h2,h3,h4{font-family:"Sora",sans-serif;color:var(--ink) !important;}
 #  AUTH — exact insurance-app pattern (proven v5)
 # ═══════════════════════════════════════════════════════════════
 def _oauth_bearer_token() -> tuple[str, str]:
-    """Get an access token. Mirrors the insurance app's proven pattern exactly."""
+    """Get an access token. OBO FIRST — always run as the logged-in user.
+    SP client_credentials only as fallback (e.g. startup before any user request)."""
     # 1. Static token (local dev)
     static_token = os.getenv("DATABRICKS_TOKEN", "").strip()
     if static_token:
         return static_token, "ENV"
 
-    # 2. OAuth client_credentials (SP identity in app container)
+    # 2. OBO forwarded token — ALWAYS PREFERRED.
+    #    Runs SQL as the logged-in user with their full UC permissions.
+    try:
+        hdrs = st.context.headers
+        tok = hdrs.get("X-Forwarded-Access-Token", "") or hdrs.get("x-forwarded-access-token", "")
+        if tok:
+            return tok, "OBO"
+    except Exception:
+        pass
+
+    # 3. SP client_credentials — fallback only when no user context.
     client_id = os.getenv("DATABRICKS_CLIENT_ID", "").strip()
     client_secret = os.getenv("DATABRICKS_CLIENT_SECRET", "").strip()
     host = os.getenv("DATABRICKS_HOST", "").strip().rstrip("/")
@@ -208,16 +219,7 @@ def _oauth_bearer_token() -> tuple[str, str]:
             payload = _json.loads(resp.read().decode("utf-8") or "{}")
         access_token = str(payload.get("access_token", "")).strip()
         if access_token:
-            return access_token, "OAuth"
-
-    # 3. OBO forwarded token (fallback, may lack sql scope)
-    try:
-        hdrs = st.context.headers
-        tok = hdrs.get("X-Forwarded-Access-Token", "") or hdrs.get("x-forwarded-access-token", "")
-        if tok:
-            return tok, "OBO"
-    except Exception:
-        pass
+            return access_token, "SP"
 
     return "", "NONE"
 
@@ -261,17 +263,237 @@ def run_dml(query: str, silent: bool = False) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  ACTION DECISIONS TABLE — user decisions persisted to Delta
+#  STARTUP: Create ALL required tables if they don't exist
+#  Mirrors report_agent_functions notebook cells 12-13 exactly.
 # ═══════════════════════════════════════════════════════════════
-def _ensure_decisions_table():
+def _ensure_all_tables():
+    """Bootstrap all tables the app needs. Idempotent — safe to call every startup."""
+    CAT = CATALOG
+
+    # 1. Schemas
+    run_dml(f"CREATE SCHEMA IF NOT EXISTS `{CAT}`.reporting")
+    run_dml(f"CREATE SCHEMA IF NOT EXISTS `{CAT}`.action_intelligence")
+
+    # 2. reporting.action_items (from notebook TOOL 6)
     run_dml(f"""
-        CREATE TABLE IF NOT EXISTS `{CATALOG}`.reporting.action_decisions (
-            action_id  STRING,
-            decision   STRING,
-            notes      STRING,
-            decided_at TIMESTAMP
-        ) USING DELTA
-    """, silent=True)
+    CREATE TABLE IF NOT EXISTS `{CAT}`.reporting.action_items (
+        action_id STRING COMMENT 'Unique action identifier',
+        run_id STRING COMMENT 'Report run that generated this action',
+        category STRING COMMENT 'IMMEDIATE (7d), SHORT_TERM (30d), or STRATEGIC (90d)',
+        timeframe STRING COMMENT 'Human-readable timeframe',
+        domain STRING COMMENT 'Supply chain domain',
+        title STRING COMMENT 'Action title',
+        description STRING COMMENT 'Full action description',
+        specific_steps STRING COMMENT 'Concrete sub-actions',
+        expected_impact STRING COMMENT 'Which metric improves and by how much',
+        priority INT COMMENT '1=highest, 10=lowest',
+        status STRING COMMENT 'PENDING, IN_PROGRESS, COMPLETED, SKIPPED',
+        created_at TIMESTAMP,
+        updated_at TIMESTAMP
+    ) USING DELTA
+    COMMENT 'Recommended actions parsed from Supervisor Agent output'
+    """)
+
+    # 3. reporting.action_evaluations (from notebook TOOL 6)
+    run_dml(f"""
+    CREATE TABLE IF NOT EXISTS `{CAT}`.reporting.action_evaluations (
+        evaluation_id STRING COMMENT 'Unique evaluation identifier',
+        action_id STRING COMMENT 'FK to action_items.action_id',
+        evaluated_at TIMESTAMP,
+        is_practical BOOLEAN COMMENT 'Can this action be executed?',
+        practicality_score FLOAT COMMENT 'Score 0.0-1.0',
+        risks STRING COMMENT 'Key risks and blockers',
+        pros STRING COMMENT 'Benefits and positive outcomes',
+        cons STRING COMMENT 'Downsides and trade-offs',
+        cost_estimate STRING COMMENT 'Estimated cost to implement',
+        historical_precedent STRING COMMENT 'Has this worked before?',
+        recommendation STRING COMMENT 'PROCEED, PROCEED_WITH_CAUTION, DEFER, REJECT',
+        reasoning STRING COMMENT 'AI reasoning'
+    ) USING DELTA
+    COMMENT 'AI-powered evaluations of recommended actions'
+    """)
+
+    # 4. reporting.action_decisions (user decisions)
+    run_dml(f"""
+    CREATE TABLE IF NOT EXISTS `{CAT}`.reporting.action_decisions (
+        action_id  STRING,
+        decision   STRING,
+        notes      STRING,
+        decided_at TIMESTAMP
+    ) USING DELTA
+    """)
+
+    # 5. action_intelligence.action_history (seed data from notebook cell 12)
+    run_dml(f"""
+    CREATE TABLE IF NOT EXISTS `{CAT}`.action_intelligence.action_history (
+        history_id STRING COMMENT 'Unique identifier',
+        action_date DATE COMMENT 'When the action was taken',
+        quarter STRING COMMENT 'Fiscal quarter',
+        domain STRING COMMENT 'Supply chain domain',
+        action_type STRING COMMENT 'IMMEDIATE, SHORT_TERM, STRATEGIC',
+        title STRING COMMENT 'What was done',
+        description STRING COMMENT 'Full details',
+        cost_usd DECIMAL(12,2) COMMENT 'Total cost',
+        duration_days INT COMMENT 'Implementation days',
+        outcome STRING COMMENT 'Result',
+        metric_before FLOAT COMMENT 'Metric value before',
+        metric_after FLOAT COMMENT 'Metric value after',
+        metric_name STRING COMMENT 'Which metric',
+        success_rating STRING COMMENT 'SUCCESS, PARTIAL, FAILED',
+        lessons_learned STRING COMMENT 'Lessons for next time',
+        region STRING COMMENT 'Region affected'
+    ) USING DELTA
+    COMMENT 'Historical record of past supply chain actions and their outcomes'
+    """)
+
+    # 6. Seed action_history if empty (12 rows from notebook)
+    _seed = run_query(f"SELECT COUNT(*) as cnt FROM `{CAT}`.action_intelligence.action_history")
+    if _seed.empty or _seed.iloc[0]["cnt"] == 0:
+        run_dml(f"""
+        INSERT INTO `{CAT}`.action_intelligence.action_history VALUES
+        ('H001', DATE '2026-03-15', 'Q3 FY2026', 'inventory', 'IMMEDIATE',
+         'Emergency air-freight for Electronics stockouts',
+         'Air-freighted 45 SKUs from Asia warehouses to Western DC after Q2 stockout crisis.',
+         452000.00, 12, 'Fill rate recovered from 72%% to 89%% within 2 weeks.',
+         72.0, 89.0, 'fill_rate', 'SUCCESS',
+         'Air freight is effective but extremely expensive. Must pair with safety stock increase.',
+         'Western'),
+        ('H002', DATE '2026-01-20', 'Q3 FY2026', 'inventory', 'SHORT_TERM',
+         'Safety stock recalibration +25%% for Western region',
+         'Increased safety stock levels by 25%% across all Western warehouse SKUs.',
+         85000.00, 21, 'Stockout SKUs dropped from 28 to 8.',
+         28.0, 8.0, 'stockout_skus', 'SUCCESS',
+         'The 25%% blanket increase was too aggressive for slow-moving SKUs.',
+         'Western'),
+        ('H003', DATE '2025-11-10', 'Q2 FY2026', 'inventory', 'IMMEDIATE',
+         'Emergency stock redistribution from East to West',
+         'Transferred 120 pallets of high-demand SKUs from Eastern DC to Western DC.',
+         38000.00, 5, 'Partially effective. 60%% of transferred SKUs matched Western demand.',
+         65.0, 73.0, 'fill_rate', 'PARTIAL',
+         'Cross-regional transfer works only when demand profiles overlap.',
+         'Western'),
+        ('H004', DATE '2026-04-01', 'Q4 FY2026', 'logistics', 'IMMEDIATE',
+         'Activated backup carriers for Western region',
+         'Onboarded 3 backup carriers after primary carrier capacity crisis.',
+         180000.00, 7, 'Late delivery rate dropped from 78%% to 45%% within 10 days.',
+         78.0, 45.0, 'late_delivery_rate', 'SUCCESS',
+         'Backup carrier contracts should be pre-negotiated.',
+         'Western'),
+        ('H005', DATE '2026-02-15', 'Q3 FY2026', 'logistics', 'SHORT_TERM',
+         'Implemented real-time shipment tracking and escalation',
+         'Deployed GPS tracking across all Western carriers. Auto-escalation triggers.',
+         95000.00, 30, 'Average delay reduced from 4.2 to 1.8 days.',
+         4.2, 1.8, 'avg_delay_days', 'SUCCESS',
+         'War room was effective but unsustainable. Transitioned to automated escalation.',
+         'Western'),
+        ('H006', DATE '2025-09-01', 'Q1 FY2026', 'logistics', 'STRATEGIC',
+         'Carrier performance-based contract renegotiation',
+         'Renegotiated contracts with top 5 carriers. Added SLA penalties.',
+         50000.00, 90, 'OTD improved from 82%% to 91%% over 3 months.',
+         82.0, 91.0, 'otd_rate', 'SUCCESS',
+         'Performance-based contracts work but cause carrier churn.',
+         'All'),
+        ('H007', DATE '2026-05-01', 'Q4 FY2026', 'supplier', 'STRATEGIC',
+         'Asia supplier diversification -- onboarded 4 new vendors',
+         'Qualified 4 new suppliers in Vietnam and India to reduce dependency.',
+         220000.00, 180, 'Asia late rate dropped from 95%% to 68%%.',
+         95.0, 68.0, 'asia_late_rate', 'PARTIAL',
+         'Diversification requires 6+ months including quality stabilization.',
+         'All'),
+        ('H008', DATE '2026-06-15', 'Q4 FY2026', 'supplier', 'IMMEDIATE',
+         'Emergency supplier escalation meetings (top 10 vendors)',
+         'Weekly executive calls with top 10 late-delivering vendors.',
+         15000.00, 14, 'Vendor late rate improved from 83%% to 71%% within 2 weeks.',
+         83.0, 71.0, 'vendor_late_rate', 'PARTIAL',
+         'Executive escalation produces quick but temporary improvement.',
+         'All'),
+        ('H009', DATE '2025-12-01', 'Q2 FY2026', 'supplier', 'SHORT_TERM',
+         'Implemented dual-sourcing for top 20 critical SKUs',
+         'Qualified secondary suppliers for 20 SKUs with highest revenue impact.',
+         130000.00, 60, 'Lead time variance dropped from 12.3 to 5.1 days.',
+         12.3, 5.1, 'lead_time_variance', 'SUCCESS',
+         'Dual-sourcing is the most reliable strategy for critical SKUs.',
+         'All'),
+        ('H010', DATE '2026-04-15', 'Q4 FY2026', 'demand', 'SHORT_TERM',
+         'Demand shaping -- promotions redirected to well-stocked regions',
+         'Shifted Q4 promotional budget from Western to Eastern and Central.',
+         0.00, 21, 'Total company revenue maintained. Western -8%% but Eastern +12%% offset.',
+         100.0, 92.0, 'west_revenue_index', 'PARTIAL',
+         'Demand shaping preserves revenue but damages regional customer relationships.',
+         'Western'),
+        ('H011', DATE '2026-07-01', 'Q1 FY2027', 'finance', 'SHORT_TERM',
+         'Freight cost audit and carrier billing reconciliation',
+         'Audited 6 months of freight invoices. Found systematic overbilling.',
+         25000.00, 45, 'Recovered $127K in overbilled freight. Ongoing savings $18K/month.',
+         0.0, 127000.0, 'recovered_cost', 'SUCCESS',
+         'Freight audits should be quarterly, not annual.',
+         'All'),
+        ('H012', DATE '2026-08-01', 'Q1 FY2027', 'finance', 'STRATEGIC',
+         'SLA penalty enforcement automation',
+         'Automated vendor SLA breach detection and penalty assessment.',
+         65000.00, 60, 'Penalty collection rate improved from 40%% to 92%%.',
+         40.0, 92.0, 'penalty_collection_rate', 'SUCCESS',
+         'Automation is key. Manual penalty tracking missed 60%% of breaches.',
+         'All')
+        """)
+
+    # 7. Seed action_items if empty (8 realistic recommendations)
+    _ai = run_query(f"SELECT COUNT(*) as cnt FROM `{CAT}`.reporting.action_items")
+    if _ai.empty or _ai.iloc[0]["cnt"] == 0:
+        run_dml(f"""
+        INSERT INTO `{CAT}`.reporting.action_items
+        (action_id, run_id, category, timeframe, domain, title, description,
+         specific_steps, expected_impact, priority, status, created_at)
+        VALUES
+        ('ACT-001','BOOT','IMMEDIATE','Next 7 days','inventory',
+         'Emergency safety stock increase for Western region',
+         '109 inventory positions are below safety stock (61 unique SKUs). 35 positions are in full stockout across Western warehouses.',
+         '1. Identify top-20 revenue-impact SKUs in stockout. 2. Place emergency POs with expedited shipping. 3. Redistribute from Eastern DC where overlap exists.',
+         'Reduce stockout SKUs from 35 to under 10 within 7 days. Estimated revenue recovery: $450K.',
+         1, 'PENDING', CURRENT_TIMESTAMP()),
+        ('ACT-002','BOOT','IMMEDIATE','Next 7 days','logistics',
+         'Activate backup carriers for Western late shipments',
+         'Western region late delivery rate is 94.57%% with average delay of 2.94 days. 3,018 late shipments in August alone.',
+         '1. Activate 3 pre-qualified backup carriers. 2. Reroute top-100 delayed shipments. 3. Daily war-room until rate drops below 50%%.',
+         'Reduce late delivery rate from 94.57%% to under 50%% within 10 days.',
+         1, 'PENDING', CURRENT_TIMESTAMP()),
+        ('ACT-003','BOOT','IMMEDIATE','Next 7 days','supplier',
+         'Executive escalation with top 5 late suppliers (Asia)',
+         'Asia supplier late rate is 100%%. Average lead time variance is 13.67 days. 30 POs affected.',
+         '1. Schedule CEO-level calls with top 5 vendors. 2. Demand corrective action plans within 48 hours. 3. Activate penalty clauses per SLA.',
+         'Reduce Asia late rate from 100%% to 70%% within 2 weeks. Recover $340K in SLA penalties.',
+         2, 'PENDING', CURRENT_TIMESTAMP()),
+        ('ACT-004','BOOT','SHORT_TERM','Next 30 days','inventory',
+         'Safety stock recalibration using demand volatility model',
+         'Current safety stock levels are static and do not account for seasonal demand spikes or regional variability.',
+         '1. Analyze 6-month demand variance by SKU-region. 2. Implement dynamic SS = avg_demand * lead_time * safety_factor. 3. Deploy to WMS.',
+         'Prevent 80%% of future stockouts. Estimated carrying cost increase: $120K vs $2.1M revenue protection.',
+         3, 'PENDING', CURRENT_TIMESTAMP()),
+        ('ACT-005','BOOT','SHORT_TERM','Next 30 days','logistics',
+         'Implement carrier performance scorecards with automated alerts',
+         'No visibility into carrier-level performance trends. Late deliveries are detected only after customer complaints.',
+         '1. Build carrier KPI dashboard (OTD, avg delay, damage rate). 2. Set automated alerts at 15%% late threshold. 3. Monthly review cadence.',
+         'Proactive carrier management. Reduce average delay from 2.94 to under 1.5 days.',
+         4, 'PENDING', CURRENT_TIMESTAMP()),
+        ('ACT-006','BOOT','SHORT_TERM','Next 30 days','demand',
+         'Revenue recovery plan for Western region decline',
+         'Western region revenue dropped $349K MoM (Aug vs Jul). Home Goods family declined the most.',
+         '1. Root-cause analysis on Home Goods cancellations. 2. Redirect promotional spend to well-stocked categories. 3. Offer substitution for out-of-stock SKUs.',
+         'Recover 60%% of revenue decline ($210K) through demand shaping and substitution.',
+         3, 'PENDING', CURRENT_TIMESTAMP()),
+        ('ACT-007','BOOT','STRATEGIC','Next 90 days','supplier',
+         'Dual-sourcing program for Asia-dependent critical SKUs',
+         'Over 60%% of purchase orders depend on Asia-based suppliers with 100%% late rate and 13.67-day average lead time variance.',
+         '1. Identify top-30 revenue-critical Asia-only SKUs. 2. Qualify secondary suppliers in Eastern Europe. 3. Run parallel POs for 2 quarters.',
+         'Reduce Asia dependency from 60%% to 35%%. Cut lead time variance by 40%%.',
+         5, 'PENDING', CURRENT_TIMESTAMP()),
+        ('ACT-008','BOOT','STRATEGIC','Next 90 days','finance',
+         'Cost of Disruption reduction program',
+         'Total Cost of Disruption is $3.76M (cancelled revenue + late shipping costs + SLA penalties).',
+         '1. Quantify CoD by root cause (inventory, logistics, supplier). 2. Prioritize interventions by ROI. 3. Set quarterly CoD reduction targets.',
+         'Reduce total CoD from $3.76M to under $2M within 2 quarters. Target 47%% reduction.',
+         5, 'PENDING', CURRENT_TIMESTAMP())
+        """)
 
 
 def write_decision(action_id: str, decision: str, notes: str = "") -> bool:
@@ -434,19 +656,28 @@ if not tok:
     st.error("No credentials found. Check app configuration.")
     st.stop()
 
-bar.progress(20, "Authenticated. Setting up...")
-if "decisions_table_ready" not in st.session_state:
-    _ensure_decisions_table()
-    st.session_state["decisions_table_ready"] = True
+bar.progress(10, f"Authenticated ({auth_mode}). Checking environment...")
+if "tables_ready" not in st.session_state:
+    bar.progress(15, "Creating schema: reporting...")
+    ok1 = run_dml(f"CREATE SCHEMA IF NOT EXISTS `{CATALOG}`.reporting")
+    bar.progress(20, "Creating schema: action_intelligence...")
+    ok2 = run_dml(f"CREATE SCHEMA IF NOT EXISTS `{CATALOG}`.action_intelligence")
+    bar.progress(20, "Creating tables...")
+    _ensure_all_tables()
+    bar.progress(35, "Seeding data if needed...")
+    bar.progress(40, "Tables + seed data ready.")
+    st.session_state["tables_ready"] = True
+else:
+    bar.progress(40, "Tables already ready.")
 
-bar.progress(45, "Loading actions...")
+bar.progress(50, "Loading actions...")
 df_act = load_actions()
 bar.progress(65, "Loading decisions...")
 df_dec = load_decisions()
 bar.progress(82, "Loading history...")
 df_hist = load_history()
-bar.progress(100, "Ready")
-_time.sleep(0.22)
+bar.progress(100, f"Ready {emdash} running as {auth_mode}")
+_time.sleep(0.5)
 bar.empty()
 
 # Merge user decisions into action dataframe
@@ -554,7 +785,7 @@ tab5, tab1, tab2, tab3, tab4 = st.tabs([
 # ══════════════════════════════════════════════════════════════
 with tab1:
     if df_act.empty:
-        st.info("No actions found. Run the Report Agent notebook to populate data.")
+        st.info("No actions in queue yet. Actions appear after running the Supervisor Agent analysis.")
     else:
         # Filter bar
         fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 2])
@@ -733,7 +964,7 @@ with tab2:
 # ══════════════════════════════════════════════════════════════
 with tab3:
     if df_hist.empty:
-        st.info("No historical data. Run the Report Agent notebook to seed action_history.")
+        st.info("No historical data found.")
     else:
         doms_h = sorted(df_hist["domain"].dropna().unique()) if "domain" in df_hist.columns else []
         sel_dh = st.multiselect("Filter domain", doms_h, default=doms_h,

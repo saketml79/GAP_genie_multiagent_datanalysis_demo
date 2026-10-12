@@ -14,9 +14,11 @@
 
 dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID")
+dbutils.widgets.text("agent_label", "Iteration 3", "Agent Label")
 CATALOG = dbutils.widgets.get("catalog_name")
 WAREHOUSE_ID = dbutils.widgets.get("warehouse_id")
-print(f"Catalog: {CATALOG}, Warehouse: {WAREHOUSE_ID}")
+AGENT_LABEL = dbutils.widgets.get("agent_label")
+print(f"Catalog: {CATALOG}, Warehouse: {WAREHOUSE_ID}, Label: {AGENT_LABEL}")
 
 # COMMAND ----------
 
@@ -206,7 +208,7 @@ space_ids = {}
 for space_name, config in spaces_config.items():
     # Create the space
     # Append iteration label to title so each iteration set is distinguishable
-    display_title = f"{space_name} - Baseline"
+    display_title = f"{space_name} - {AGENT_LABEL}"
     create_resp = requests.post(
         f"{host}/api/2.0/genie/spaces",
         headers=headers,
@@ -594,21 +596,108 @@ for i, example in enumerate(quality_examples):
 
 # COMMAND ----------
 
+# DBTITLE 1,Create MCP Supervisor (Genie One MCP)
+# MAGIC %md
+# MAGIC ## Create MCP Supervisor (Genie One MCP)
+# MAGIC A second Supervisor Agent whose only tool is `system.ai.genie_one_mcp`. This gives the Supervisor
+# MAGIC access to the full Genie One system (UC Pages, knowledge snippets, ontology) through MCP tool calls.
+# MAGIC
+# MAGIC **Key design**: Forward the ENTIRE user prompt in a single MCP call. Each MCP round-trip consumes
+# MAGIC 3 of the 15-step budget, so splitting the prompt exhausts the budget after 5 calls.
+
+# COMMAND ----------
+
+# DBTITLE 1,Create MCP Supervisor + genie_one_mcp tool
+# ====================================================================
+# CREATE MCP SUPERVISOR — Genie One MCP tool
+# ====================================================================
+MCP_SUP_NAME = "Supply Chain MCP Supervisor"
+
+MCP_DESCRIPTION = (
+    "Supply Chain Control Tower powered by Genie One MCP. "
+    "Answers comprehensive supply chain questions by forwarding the full prompt "
+    "to genie-one-mcp in a single call. Never fabricates data."
+)
+
+MCP_INSTRUCTIONS = """You are a Supply Chain analyst. You have ONE tool: genie-one-mcp (Genie One).
+
+CRITICAL: You have a 15-step budget. Each Genie One call uses 3 steps.
+That gives you only 5 calls total. USE THEM WISELY.
+
+STRATEGY:
+1. Forward the user's ENTIRE prompt to Genie One in your FIRST call. Do NOT break it up.
+   Genie One handles comprehensive multi-topic prompts internally.
+2. Pass through Genie One's COMPLETE response including ALL numbers, tables, details.
+3. NEVER ROUND numbers. If Genie One returns 3341062.58, write 3341062.58, NOT 3,341,063.
+   If it returns 80.70, write 80.70, NOT 80.7% or ~81%. Every decimal place matters.
+4. Include ALL table data exactly as returned. Do not summarize tables into narrative.
+5. If Genie One's response misses a section, use remaining calls for missing topics.
+6. West = Western region. Last month = August 2026.
+7. NEVER say 'Data Not Available' — always call the tool first."""
+
+MCP_TOOL_DESC = (
+    "Genie One MCP — the ONLY tool you need. Answers ANY supply chain question about "
+    f"{CATALOG}: revenue, demand, logistics, shipments, inventory, suppliers, SLA penalties, "
+    "Cost of Disruption, policy thresholds, fiscal targets, and executive KPIs. "
+    "Call this tool ONCE with the full user question. NEVER assume data is unavailable."
+)
+
+print(f"Creating MCP Supervisor: {MCP_SUP_NAME}...")
+create_mcp = requests.post(
+    f"{host}/api/2.1/supervisor-agents", headers=headers,
+    json={"display_name": MCP_SUP_NAME, "description": MCP_DESCRIPTION},
+)
+if create_mcp.status_code in (200, 201):
+    mcp_sup = create_mcp.json()
+    mcp_sup_name = mcp_sup["name"]
+    mcp_ep = mcp_sup.get("endpoint_name", "")
+    print(f"  Created: {mcp_sup_name}, Endpoint: {mcp_ep}")
+else:
+    print(f"  Failed: {create_mcp.status_code} - {create_mcp.text[:300]}")
+    mcp_sup_name = None
+
+if mcp_sup_name:
+    # Apply instructions
+    patch_r = requests.patch(
+        f"{host}/api/2.1/{mcp_sup_name}?update_mask=description,instructions",
+        headers=headers,
+        json={"description": MCP_DESCRIPTION, "instructions": MCP_INSTRUCTIONS},
+    )
+    print(f"  Instructions: {'applied' if patch_r.status_code == 200 else 'FAILED ' + patch_r.text[:200]}")
+
+    # Add genie_one_mcp tool
+    add_tool = requests.post(
+        f"{host}/api/2.1/{mcp_sup_name}/tools?tool_id=genie-one-mcp",
+        headers=headers,
+        json={
+            "tool_type": "uc_mcp",
+            "uc_mcp": {"name": "system.ai.genie_one_mcp"},
+            "description": MCP_TOOL_DESC,
+        },
+    )
+    print(f"  Tool: {'added' if add_tool.status_code in (200, 201) else 'FAILED ' + add_tool.text[:200]}")
+    print(f"  MCP Supervisor: {mcp_sup_name} (endpoint: {mcp_ep})")
+
+# COMMAND ----------
+
 print("\n" + "="*60)
 print("SETUP COMPLETE")
 print("="*60)
 print(f"Catalog: {CATALOG}")
 print(f"Warehouse: {WAREHOUSE_ID}")
+print(f"Label: {AGENT_LABEL}")
 print(f"\nGenie Spaces:")
 for name, sid in space_ids.items():
     print(f"  {name}: {sid}")
-print(f"\nSupervisor Agent: {supervisor_name}")
+print(f"\nDomain Supervisor: {supervisor_name}")
+if mcp_sup_name:
+    print(f"MCP Supervisor: {mcp_sup_name} (endpoint: {mcp_ep})")
 print(f"\nTest prompt:")
 print('"Why did revenue drop in the Western Region, are we going to miss our service-level targets, and what actions should we take?"')
 
 # COMMAND ----------
 
-# DBTITLE 1,Verify: agents and supervisor created
+# DBTITLE 1,Verify: agents, supervisor, and MCP supervisor created
 # ── Assertions ──
 import requests as _rq
 
@@ -624,6 +713,12 @@ for agent_key in expected_agent_keys:
     resp = _rq.get(f"{host}/api/2.0/genie/spaces/{sid}", headers=headers)
     assert resp.status_code == 200, f"Agent '{agent_key}' ({sid}) not reachable: {resp.status_code}"
 print(f"✓ ASSERT PASS: all 5 Genie agents exist and reachable")
+
+# Verify MCP supervisor exists
+assert mcp_sup_name, "MISSING: mcp_sup_name is empty"
+resp = _rq.get(f"{host}/api/2.1/{mcp_sup_name}", headers=headers)
+assert resp.status_code == 200, f"MCP Supervisor '{mcp_sup_name}' not reachable: {resp.status_code}"
+print(f"✓ ASSERT PASS: MCP Supervisor reachable ({mcp_sup_name})")
 
 # Verify supervisor agent exists
 assert supervisor_name, "MISSING: supervisor_name is empty"

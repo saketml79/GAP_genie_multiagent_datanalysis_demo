@@ -12,4 +12,4 @@ env:
   - name: CATALOG
     value: GAP_Demo_Dev
   - name: WAREHOUSE_ID
-    value: bf50738cf2819197
+    value: e3a0fc2c08db05bb

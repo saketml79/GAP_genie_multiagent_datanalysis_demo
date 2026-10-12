@@ -1,11 +1,46 @@
 command:
   - python
-  - app.py
-
+  - main.py
 env:
   - name: CATALOG_NAME
     value: GAP_Demo_Dev
   - name: WAREHOUSE_ID
-    value: bf50738cf2819197
-
+    value: e3a0fc2c08db05bb
+  - name: SETUP_JOB_ID
+    value: "98136556715691"
+  - name: TEARDOWN_JOB_ID
+    value: "154776446737504"
+  - name: ITER1_SUPERVISOR_JOB_ID
+    value: "259736012262518"
+  - name: ITER2_SUPERVISOR_JOB_ID
+    value: "1094064836949489"
+  - name: ITER3_SUPERVISOR_JOB_ID
+    value: "284642880322775"
+  - name: SRC_DIR
+    value: /Workspace/Users/ssuman@bpcs.com/GAP_genie_multiagent_datanalysis_demo/src
+resources:
+  - name: setup-job
+    job:
+      id: "98136556715691"
+      permission: CAN_MANAGE_RUN
+  - name: teardown-job
+    job:
+      id: "154776446737504"
+      permission: CAN_MANAGE_RUN
+  - name: iter1-supervisor-job
+    job:
+      id: "259736012262518"
+      permission: CAN_MANAGE_RUN
+  - name: iter2-supervisor-job
+    job:
+      id: "1094064836949489"
+      permission: CAN_MANAGE_RUN
+  - name: iter3-supervisor-job
+    job:
+      id: "284642880322775"
+      permission: CAN_MANAGE_RUN
+  - name: sql-warehouse
+    sql_warehouse:
+      id: e3a0fc2c08db05bb
+      permission: CAN_USE
 source_code_path: /Workspace/Users/ssuman@bpcs.com/GAP_genie_multiagent_datanalysis_demo/src/genie-curator-workbench
