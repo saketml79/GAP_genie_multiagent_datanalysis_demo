@@ -12,13 +12,16 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Parameters
 dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
 dbutils.widgets.text("warehouse_id", "", "SQL Warehouse ID")
 dbutils.widgets.text("agent_label", "Iteration 3", "Agent Label")
+dbutils.widgets.text("user_alias", "", "User Alias (for per-user sandbox)")
 CATALOG = dbutils.widgets.get("catalog_name")
 WAREHOUSE_ID = dbutils.widgets.get("warehouse_id")
 AGENT_LABEL = dbutils.widgets.get("agent_label")
-print(f"Catalog: {CATALOG}, Warehouse: {WAREHOUSE_ID}, Label: {AGENT_LABEL}")
+USER_ALIAS = dbutils.widgets.get("user_alias").strip()
+print(f"Catalog: {CATALOG}, Warehouse: {WAREHOUSE_ID}, Label: {AGENT_LABEL}, Alias: {USER_ALIAS or '(none)'}")
 
 # COMMAND ----------
 
@@ -203,12 +206,17 @@ print(f"Provenance requirement appended to {len(spaces_config)} agent instructio
 
 # COMMAND ----------
 
+# DBTITLE 1,Create Genie Spaces with per-user naming
 space_ids = {}
 
 for space_name, config in spaces_config.items():
     # Create the space
-    # Append iteration label to title so each iteration set is distinguishable
-    display_title = f"{space_name} - {AGENT_LABEL}"
+    # Append user alias (if provided) and iteration label to title for per-user sandbox
+    # e.g. "SC - Demand Analysis (ssuman_bpcs_com) - Baseline"
+    if USER_ALIAS:
+        display_title = f"{space_name} ({USER_ALIAS}) - {AGENT_LABEL}"
+    else:
+        display_title = f"{space_name} - {AGENT_LABEL}"
     create_resp = requests.post(
         f"{host}/api/2.0/genie/spaces",
         headers=headers,
@@ -393,8 +401,9 @@ print(f"✓ Ground truth table created: {CATALOG}.reporting.ground_truth_kpis")
 spark.sql(f"SELECT * FROM {CATALOG}.reporting.ground_truth_kpis ORDER BY agent, metric").display()
 
 # Create Evaluator Genie Space
+_eval_title = f"SC - Evaluator ({USER_ALIAS})" if USER_ALIAS else "SC - Evaluator"
 evaluator_config = {
-    "title": "SC - Evaluator",
+    "title": _eval_title,
     "description": "Evaluator Agent with ground truth KPIs for validation.",
     "warehouse_id": WAREHOUSE_ID,
     "table_identifiers": [f"{CATALOG}.reporting.ground_truth_kpis"],
@@ -404,7 +413,7 @@ create_resp = requests.post(f"{host}/api/2.0/genie/spaces", headers=headers, jso
 if create_resp.status_code in (200, 201):
     eval_space_id = create_resp.json().get("space_id") or create_resp.json().get("id")
     space_ids["SC - Evaluator"] = eval_space_id
-    print(f"✓ Created: SC - Evaluator ({eval_space_id})")
+    print(f"✓ Created: {_eval_title} ({eval_space_id})")
     
     # Define evaluator instructions and serialized space config
     eval_instructions = """You are the Evaluator Agent. Your job is to COMPARE the Supervisor's reported findings against the ground_truth_kpis table.
@@ -465,12 +474,12 @@ else:
 
 # COMMAND ----------
 
-# DBTITLE 1,Create Supervisor Agent (enhanced baseline instructions)
+# DBTITLE 1,Create Supervisor Agent (enhanced baseline instructions — idempotent)
 # ====================================================================
 # CREATE SUPERVISOR AGENT -- RAW BASELINE (minimal instructions)
 # ====================================================================
 supervisor_payload = {
-    "display_name": "Supply Chain Control Tower",
+    "display_name": f"Supply Chain Control Tower ({USER_ALIAS})" if USER_ALIAS else "Supply Chain Control Tower",
     "description": "Multi-agent supply chain analysis system that coordinates demand, inventory, logistics, supplier, and executive reporting agents.",
     "instructions": """You are a Supply Chain Control Tower Supervisor Agent. You coordinate 5 specialist Genie agents to deliver comprehensive supply chain analysis.
 
@@ -490,20 +499,53 @@ ROUTING RULES:
 6. If an agent reports it cannot answer, report the gap. Do NOT fabricate data."""
 }
 
-create_resp = requests.post(
-    f"{host}/api/2.1/supervisor-agents",
-    headers=headers,
-    json=supervisor_payload
-)
+# Idempotent: check if a matching supervisor already exists before creating
+_sup_display = supervisor_payload["display_name"]
+supervisor_name = None
+try:
+    _list_r = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers, timeout=15)
+    if _list_r.status_code == 200:
+        for _s in _list_r.json().get("supervisor_agents", []):
+            if _s.get("display_name") == _sup_display:
+                supervisor_name = _s["name"]
+                print(f"✓ Supervisor already exists: {supervisor_name} — reusing")
+                # Update instructions in case they changed
+                _patch = requests.patch(
+                    f"{host}/api/2.1/{supervisor_name}?update_mask=description,instructions",
+                    headers=headers,
+                    json={"description": supervisor_payload["description"],
+                          "instructions": supervisor_payload["instructions"]},
+                )
+                print(f"  Instructions: {'updated' if _patch.status_code == 200 else 'PATCH ' + str(_patch.status_code)}")
+                break
+except Exception as e:
+    print(f"  Warning: could not list supervisors: {e}")
 
-if create_resp.status_code in (200, 201):
-    supervisor_data = create_resp.json()
-    supervisor_name = supervisor_data.get("name", "")
-    print(f"✓ Supervisor Agent created: {supervisor_name}")
-    print(f"  Display name: {supervisor_data.get('display_name')}")
-else:
-    print(f"✗ Failed: {create_resp.status_code} - {create_resp.text[:300]}")
-    dbutils.notebook.exit(f"Supervisor creation failed: {create_resp.status_code}")
+if not supervisor_name:
+    create_resp = requests.post(
+        f"{host}/api/2.1/supervisor-agents",
+        headers=headers,
+        json=supervisor_payload
+    )
+    if create_resp.status_code in (200, 201):
+        supervisor_data = create_resp.json()
+        supervisor_name = supervisor_data.get("name", "")
+        print(f"✓ Supervisor Agent created: {supervisor_name}")
+        print(f"  Display name: {supervisor_data.get('display_name')}")
+    elif create_resp.status_code == 409:
+        # Race condition: created between list and post — find it
+        _list2 = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers, timeout=15)
+        for _s in _list2.json().get("supervisor_agents", []):
+            if _s.get("display_name") == _sup_display:
+                supervisor_name = _s["name"]
+                print(f"✓ Supervisor found after 409: {supervisor_name}")
+                break
+        if not supervisor_name:
+            print(f"✗ 409 but supervisor not found — cannot proceed")
+            dbutils.notebook.exit("Supervisor creation failed: 409 (conflict, not found on retry)")
+    else:
+        print(f"✗ Failed: {create_resp.status_code} - {create_resp.text[:300]}")
+        dbutils.notebook.exit(f"Supervisor creation failed: {create_resp.status_code}")
 
 # COMMAND ----------
 
@@ -607,7 +649,7 @@ for i, example in enumerate(quality_examples):
 
 # COMMAND ----------
 
-# DBTITLE 1,Create MCP Supervisor + genie_one_mcp tool
+# DBTITLE 1,Create MCP Supervisor + genie_one_mcp tool (idempotent)
 # ====================================================================
 # CREATE MCP SUPERVISOR — Genie One MCP tool
 # ====================================================================
@@ -642,19 +684,45 @@ MCP_TOOL_DESC = (
     "Call this tool ONCE with the full user question. NEVER assume data is unavailable."
 )
 
+# Idempotent: reuse existing MCP supervisor if one matches
 print(f"Creating MCP Supervisor: {MCP_SUP_NAME}...")
-create_mcp = requests.post(
-    f"{host}/api/2.1/supervisor-agents", headers=headers,
-    json={"display_name": MCP_SUP_NAME, "description": MCP_DESCRIPTION},
-)
-if create_mcp.status_code in (200, 201):
-    mcp_sup = create_mcp.json()
-    mcp_sup_name = mcp_sup["name"]
-    mcp_ep = mcp_sup.get("endpoint_name", "")
-    print(f"  Created: {mcp_sup_name}, Endpoint: {mcp_ep}")
-else:
-    print(f"  Failed: {create_mcp.status_code} - {create_mcp.text[:300]}")
-    mcp_sup_name = None
+mcp_sup_name = None
+mcp_ep = ""
+try:
+    _list_mcp = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers, timeout=15)
+    if _list_mcp.status_code == 200:
+        for _s in _list_mcp.json().get("supervisor_agents", []):
+            if _s.get("display_name") == MCP_SUP_NAME:
+                mcp_sup_name = _s["name"]
+                mcp_ep = _s.get("endpoint_name", "")
+                print(f"  Already exists: {mcp_sup_name} — reusing")
+                break
+except Exception as e:
+    print(f"  Warning: could not list supervisors: {e}")
+
+if not mcp_sup_name:
+    create_mcp = requests.post(
+        f"{host}/api/2.1/supervisor-agents", headers=headers,
+        json={"display_name": MCP_SUP_NAME, "description": MCP_DESCRIPTION},
+    )
+    if create_mcp.status_code in (200, 201):
+        mcp_sup = create_mcp.json()
+        mcp_sup_name = mcp_sup["name"]
+        mcp_ep = mcp_sup.get("endpoint_name", "")
+        print(f"  Created: {mcp_sup_name}, Endpoint: {mcp_ep}")
+    elif create_mcp.status_code == 409:
+        _list2 = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers, timeout=15)
+        for _s in _list2.json().get("supervisor_agents", []):
+            if _s.get("display_name") == MCP_SUP_NAME:
+                mcp_sup_name = _s["name"]
+                mcp_ep = _s.get("endpoint_name", "")
+                print(f"  Found after 409: {mcp_sup_name}")
+                break
+        if not mcp_sup_name:
+            print(f"  Failed: 409 but supervisor not found")
+    else:
+        print(f"  Failed: {create_mcp.status_code} - {create_mcp.text[:300]}")
+        mcp_sup_name = None
 
 if mcp_sup_name:
     # Apply instructions

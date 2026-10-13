@@ -224,16 +224,18 @@ def _apply_comments_via_sql(host, headers, catalog, warehouse_id, log_fn=None):
     return tbl_ok, col_ok, col_total
 
 
-def clone_agents(host, headers, source_spaces, iteration_label, warehouse_id, log_fn=None):
+def clone_agents(host, headers, source_spaces, iteration_label, warehouse_id, log_fn=None, user_alias=None):
     """Clone 5 domain agents from source into new agents with iteration label.
-    IDEMPOTENT: if agents with the iteration label already exist, reuse them."""
-    title_prefix = {
+    IDEMPOTENT: if agents with the iteration label already exist, reuse them.
+    user_alias: if provided, agent titles include '(alias)' suffix for per-user sandboxing."""
+    _base = {
         "demand": "SC - Demand Analysis",
         "inventory": "SC - Inventory Management",
         "logistics": "SC - Logistics Operations",
         "supplier": "SC - Supplier Risk",
         "executive": "SC - Executive Reporting",
     }
+    title_prefix = {k: f"{v} ({user_alias})" for k, v in _base.items()} if user_alias else _base
     new_spaces, log = {}, []
     _log = log_fn or (lambda m: None)
 
@@ -299,6 +301,12 @@ def clone_agents(host, headers, source_spaces, iteration_label, warehouse_id, lo
 
 
 SUPERVISOR_DISPLAY_NAME = "Supply Chain Control Tower"
+
+def _sup_display_name(user_alias=None):
+    """Per-user supervisor name: 'Supply Chain Control Tower (ssuman_bpcs_com)'."""
+    if user_alias:
+        return f"{SUPERVISOR_DISPLAY_NAME} ({user_alias})"
+    return SUPERVISOR_DISPLAY_NAME
 SUPERVISOR_DESCRIPTION = (
     "Multi-agent supply chain analysis system that coordinates demand, inventory, logistics, "
     "supplier, and executive reporting agents."
@@ -378,7 +386,7 @@ def _iteration_label(iteration_label):
     return s if s.lower().startswith("iteration ") else f"Iteration {s}"
 
 
-def _discover_iteration_spaces(host, headers, iteration_label):
+def _discover_iteration_spaces(host, headers, iteration_label, user_alias=None):
     label = _iteration_label(iteration_label)
     found, newest = {}, {}
     page_token = None
@@ -393,7 +401,9 @@ def _discover_iteration_spaces(host, headers, iteration_label):
             if label not in title:
                 continue
             for agent_name, meta in SUPERVISOR_TOOL_MAP.items():
-                base = f"{meta['space_prefix']} - {label}"
+                # Match user-scoped titles: "SC - Demand Analysis (alias) - Iteration 1"
+                prefix = f"{meta['space_prefix']} ({user_alias})" if user_alias else meta['space_prefix']
+                base = f"{prefix} - {label}"
                 # exact title, or Genie's duplicate-title suffix (" 2026-10-11 20:36:20"); newest wins
                 if title == base or title.startswith(base + " 20"):
                     ct = sp.get("create_time") or ""
@@ -405,41 +415,55 @@ def _discover_iteration_spaces(host, headers, iteration_label):
             break
     missing = [a for a in SUPERVISOR_TOOL_MAP if a not in found]
     if missing:
-        raise RuntimeError(f"Missing {label} agents: {', '.join(missing)}")
+        raise RuntimeError(f"Missing {label} agents for alias={user_alias or '(none)'}: {', '.join(missing)}")
     return found
 
 
-def _get_or_create_supervisor(host, headers, log_fn=None):
+def _get_or_create_supervisor(host, headers, log_fn=None, user_alias=None):
     _log = log_fn or (lambda m: None)
+    display = _sup_display_name(user_alias)
     r = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers, timeout=30)
     if r.status_code != 200:
         raise RuntimeError(f"List supervisors failed: {r.status_code} {r.text[:200]}")
     for sup in r.json().get("supervisor_agents", []):
-        if sup.get("display_name") == SUPERVISOR_DISPLAY_NAME:
+        if sup.get("display_name") == display:
             return sup["name"], False
+    # Include alias scoping in initial instructions when creating
+    _init_instructions = SUPERVISOR_BASE_INSTRUCTIONS
+    if user_alias:
+        alias_hint = (f"USER CONTEXT: The current user is ({user_alias}). "
+                      f"ONLY use Genie agent tools whose names contain ({user_alias}). "
+                      f"Ignore any agents that do not include ({user_alias}) in their name.")
+        _init_instructions = alias_hint + "\n\n" + _init_instructions
     cr = requests.post(
         f"{host}/api/2.1/supervisor-agents",
         headers=headers,
         json={
-            "display_name": SUPERVISOR_DISPLAY_NAME,
+            "display_name": display,
             "description": SUPERVISOR_DESCRIPTION,
-            "instructions": SUPERVISOR_BASE_INSTRUCTIONS,
+            "instructions": _init_instructions,
         },
         timeout=30,
     )
     if cr.status_code not in (200, 201):
         raise RuntimeError(f"Create supervisor failed: {cr.status_code} {cr.text[:200]}")
     name = cr.json().get("name", "")
-    _log(f"  Supervisor created: {name}")
+    _log(f"  Supervisor created: {name} (display={display})")
     return name, True
 
 
-def _set_supervisor_instructions(host, headers, sup_name, include_iter3_sql, log_fn=None):
+def _set_supervisor_instructions(host, headers, sup_name, include_iter3_sql, log_fn=None, user_alias=None):
     _log = log_fn or (lambda m: None)
     instructions = SUPERVISOR_BASE_INSTRUCTIONS
     if include_iter3_sql:
         instructions = (instructions.rstrip() + "\n\n" + SUPERVISOR_ITER3_BLOCK.strip()
                         + "\n\n" + SUPERVISOR_SQL_GUIDANCE.strip())
+    # Multi-user isolation: tell the supervisor which user's agents to call
+    if user_alias:
+        alias_hint = (f"\n\nUSER CONTEXT: The current user is ({user_alias}). "
+                      f"ONLY use Genie agent tools whose names contain ({user_alias}). "
+                      f"Ignore any agents that do not include ({user_alias}) in their name.")
+        instructions = alias_hint.lstrip("\n") + "\n\n" + instructions
     pr = requests.patch(
         f"{host}/api/2.1/{sup_name}?update_mask=description,instructions",
         headers=headers,
@@ -448,7 +472,7 @@ def _set_supervisor_instructions(host, headers, sup_name, include_iter3_sql, log
     )
     if pr.status_code != 200:
         raise RuntimeError(f"Patch supervisor failed: {pr.status_code} {pr.text[:200]}")
-    _log("  Supervisor instructions updated ✓")
+    _log(f"  Supervisor instructions updated ✓" + (f" (scoped to {user_alias})" if user_alias else ""))
 
 
 def _replace_supervisor_tools(host, headers, sup_name, spaces, include_iter3_sql, log_fn=None, catalog=None):
@@ -506,16 +530,16 @@ def _replace_supervisor_tools(host, headers, sup_name, spaces, include_iter3_sql
         _log(f"  Supervisor SQL function tools: {len(ITER3_SQL_FUNCTION_TOOLS)} added ✓")
 
 
-def refresh_supervisor_for_iteration(host, headers, iteration_label, log_fn=None, catalog=None):
+def refresh_supervisor_for_iteration(host, headers, iteration_label, log_fn=None, catalog=None, user_alias=None):
     _log = log_fn or (lambda m: None)
     label = _iteration_label(iteration_label)
     include_iter3_sql = label == "Iteration 3"
-    spaces = _discover_iteration_spaces(host, headers, label)
+    spaces = _discover_iteration_spaces(host, headers, label, user_alias=user_alias)
     _log(f"Refreshing supervisor for {label}...")
-    sup_name, created = _get_or_create_supervisor(host, headers, log_fn=_log)
+    sup_name, created = _get_or_create_supervisor(host, headers, log_fn=_log, user_alias=user_alias)
     if not created:
         _log(f"  Supervisor found: {sup_name}")
-    _set_supervisor_instructions(host, headers, sup_name, include_iter3_sql, log_fn=_log)
+    _set_supervisor_instructions(host, headers, sup_name, include_iter3_sql, log_fn=_log, user_alias=user_alias)
     _replace_supervisor_tools(host, headers, sup_name, spaces, include_iter3_sql, log_fn=_log, catalog=catalog)
     _log(f"Supervisor ready for {label} ✓")
     return {"supervisor_name": sup_name, "created": created, "spaces": spaces}
@@ -724,7 +748,7 @@ def _iter1_benchmarks(CAT):
 # MAIN ENTRY POINT: run_iteration_1
 # ============================================================
 
-def run_iteration_1(host, headers, catalog, warehouse_id, discover_agents_fn, log_fn=None):
+def run_iteration_1(host, headers, catalog, warehouse_id, discover_agents_fn, log_fn=None, user_alias=None):
     """Run Iteration 1: Column Comments + Example SQL + Benchmarks.
     Returns list of log lines."""
     lines = ["=== ITERATION 1: Column Comments + Example SQL + Benchmarks ==="]
@@ -745,7 +769,7 @@ def run_iteration_1(host, headers, catalog, warehouse_id, discover_agents_fn, lo
     # Step 1: Clone Baseline -> Iteration 1
     lines.append("\n[Step 1] Cloning Baseline agents -> Iteration 1...")
     _emit("Cloning 5 domain agents → Iteration 1...")
-    spaces, clone_log = clone_agents(host, headers, baseline, "Iteration 1", warehouse_id, log_fn=_emit)
+    spaces, clone_log = clone_agents(host, headers, baseline, "Iteration 1", warehouse_id, log_fn=_emit, user_alias=user_alias)
     lines.extend(clone_log)
     if len(spaces) < 5:
         lines.append(f"  [!] Only cloned {len(spaces)} agents")
@@ -1034,7 +1058,7 @@ def _add_tables_to_agents(host, headers, spaces, agent_tables, cod_instr=None, l
             _log(f"  {agent_name}: error {e}")
 
 
-def run_iteration_2(host, headers, catalog, warehouse_id, discover_agents_fn, log_fn=None):
+def run_iteration_2(host, headers, catalog, warehouse_id, discover_agents_fn, log_fn=None, user_alias=None):
     """Run Iteration 2: UC Metric Views + Governed Tags + CoD View.
     Replicates notebook cell 13 exactly via SQL Statement API + Genie API.
     Returns (text, spaces) on success, or text on failure."""
@@ -1053,7 +1077,7 @@ def run_iteration_2(host, headers, catalog, warehouse_id, discover_agents_fn, lo
 
     # Step 1: Clone Iteration 1 -> Iteration 2
     _emit("Cloning 5 domain agents → Iteration 2...")
-    spaces, clone_log = clone_agents(host, headers, source, "Iteration 2", warehouse_id, log_fn=_emit)
+    spaces, clone_log = clone_agents(host, headers, source, "Iteration 2", warehouse_id, log_fn=_emit, user_alias=user_alias)
     lines.extend(clone_log)
     if len(spaces) < 5:
         lines.append(f"  [!] Only cloned {len(spaces)} agents")
@@ -1332,7 +1356,7 @@ def _add_provenance_instruction(host, headers, spaces, log_fn=None):
     _log("  Provenance instructions added to sub-agents \u2713")
 
 
-def run_iteration_3(host, headers, catalog, warehouse_id, discover_agents_fn, log_fn=None):
+def run_iteration_3(host, headers, catalog, warehouse_id, discover_agents_fn, log_fn=None, user_alias=None):
     """Run Iteration 3: SQL Functions + Fiscal Targets + Supervisor Enhancement.
     Returns (text, spaces) on success, or text on failure."""
     lines = ["=== ITERATION 3: SQL Functions + Fiscal Targets ==="]
@@ -1345,7 +1369,7 @@ def run_iteration_3(host, headers, catalog, warehouse_id, discover_agents_fn, lo
         return "\n".join(lines)
     _emit(f"Found {len(source)} Iteration 2 agents \u2713")
     _emit("Cloning 5 domain agents -> Iteration 3...")
-    spaces, clone_log = clone_agents(host, headers, source, "Iteration 3", warehouse_id, log_fn=_emit)
+    spaces, clone_log = clone_agents(host, headers, source, "Iteration 3", warehouse_id, log_fn=_emit, user_alias=user_alias)
     lines.extend(clone_log)
     if len(spaces) < 5:
         return "\n".join(lines)
@@ -1440,9 +1464,14 @@ def _main():
     parser.add_argument("--mode", choices=["supervisor-job"], required=True)
     parser.add_argument("--iteration", required=True)
     parser.add_argument("--catalog", default=os.getenv("CATALOG_NAME", ""))
+    parser.add_argument("--user-alias", default="", dest="user_alias",
+                        help="Per-user sandbox alias (e.g. ssuman_bpcs_com)")
     args = parser.parse_args()
+    alias = args.user_alias or None
     host, headers = _runtime_host_headers()
-    refresh_supervisor_for_iteration(host, headers, args.iteration, log_fn=print, catalog=args.catalog)
+    refresh_supervisor_for_iteration(host, headers, args.iteration,
+                                     log_fn=print, catalog=args.catalog,
+                                     user_alias=alias)
     tag_supervisor_endpoints(host, headers, log_fn=print)
     print(f"DONE: supervisor refreshed for {_iteration_label(args.iteration)}")
 

@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # Share the demo with all users (last task of Full Setup)
 # MAGIC
@@ -98,6 +102,7 @@ print(f"Supervisor endpoints: {ok}/{len(eps)} shared with '{SHARE_GROUP}' (CAN_Q
 
 # DBTITLE 1,Databricks SQL access entitlement for the users group
 # Without this entitlement, users cannot see Genie agents in the left sidebar.
+# Requires workspace admin — skip gracefully if not authorized.
 try:
     g = requests.get(f"{host}/api/2.0/preview/scim/v2/Groups", headers=headers, timeout=30,
                      params={"filter": f'displayName eq "{SHARE_GROUP}"'}).json().get("Resources", [])
@@ -109,8 +114,13 @@ try:
         pr = requests.patch(f"{host}/api/2.0/preview/scim/v2/Groups/{g[0]['id']}", headers=headers, timeout=30, json={
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
             "Operations": [{"op": "add", "path": "entitlements", "value": [{"value": "databricks-sql-access"}]}]})
-        print("Databricks SQL access:", "granted" if pr.status_code == 200 else f"failed {pr.status_code}")
-        if pr.status_code != 200: warnings.append(f"Entitlement: {pr.status_code} {pr.text[:120]}")
+        if pr.status_code == 200:
+            print("Databricks SQL access: granted")
+        elif pr.status_code == 403:
+            print("Databricks SQL access: skipped (requires workspace admin — ask an admin to enable it, or it may already be enabled)")
+        else:
+            print(f"Databricks SQL access: failed {pr.status_code}")
+            warnings.append(f"Entitlement: {pr.status_code} {pr.text[:120]}")
 except Exception as e:
     warnings.append(f"Entitlement: {e}")
 

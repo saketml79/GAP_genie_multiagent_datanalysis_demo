@@ -6,10 +6,13 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Parameters
 dbutils.widgets.text("catalog_name", "", "Catalog Name")
+dbutils.widgets.text("user_alias", "", "User Alias (for per-user sandbox)")
 CATALOG = dbutils.widgets.get("catalog_name")
+USER_ALIAS = dbutils.widgets.get("user_alias").strip()
 
-print(f"TEARDOWN STARTING for {CATALOG}")
+print(f"TEARDOWN STARTING for {CATALOG} (alias={USER_ALIAS or 'all'})")
 
 # COMMAND ----------
 
@@ -28,6 +31,7 @@ except:
 
 # COMMAND ----------
 
+# DBTITLE 1,Delete Supervisors (scoped to user)
 # ---- Delete Supervisor Agents (all pages) + any orphaned Control Tower endpoints ----
 _sups, _tok = [], None
 for _ in range(50):
@@ -43,6 +47,9 @@ for _ in range(50):
 _sup_deleted = 0
 for agent in _sups:
     dn = agent.get("display_name", "")
+    # Scope to user alias if provided, otherwise delete all SC supervisors
+    if USER_ALIAS and f"({USER_ALIAS})" not in dn:
+        continue  # skip — belongs to another user
     if "Supply Chain" in dn or "Control Tower" in dn:
         del_resp = requests.delete(f"{host}/api/2.1/{agent['name']}", headers=headers)
         ok = del_resp.status_code in (200, 204)
@@ -59,6 +66,7 @@ print(f"Supervisors deleted: {_sup_deleted}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Delete Genie Agents (scoped to user)
 # ---- Delete ALL Genie Spaces (all iterations: Baseline, Iter 1, 2, 3, Evaluator) ----
 # With per-iteration agent creation, there can be up to 21 agents:
 #   5 × Baseline + 5 × Iteration 1 + 5 × Iteration 2 + 5 × Iteration 3 + 1 Evaluator
@@ -78,8 +86,15 @@ for _ in range(100):
         break
 _deleted_count = 0
 if _list_error is None:
-    _targets = [s for s in _all_spaces
-                if s.get("title", "").startswith("SC - ") or ("SC" in s.get("title", "") and any(k in s.get("title", "") for k in ["Demand", "Inventory", "Logistics", "Supplier", "Executive", "Evaluator"]))]
+    def _is_user_agent(title):
+        """True if this agent belongs to the current user (or all, if no alias)."""
+        is_sc = title.startswith("SC - ") or ("SC" in title and any(k in title for k in ["Demand", "Inventory", "Logistics", "Supplier", "Executive", "Evaluator"]))
+        if not is_sc:
+            return False
+        if USER_ALIAS:
+            return f"({USER_ALIAS})" in title
+        return True  # no alias = delete all SC agents
+    _targets = [s for s in _all_spaces if _is_user_agent(s.get("title", ""))]
     print(f"Found {len(_all_spaces)} Genie agents in total; {len(_targets)} SC agents to delete")
     for space in _targets:
         title = space.get("title", "")
@@ -107,6 +122,7 @@ for _cat in _catalogs:
 
 # COMMAND ----------
 
+# DBTITLE 1,Verify teardown (scoped to user)
 # ---- Verify nothing is left (job FAILS if anything remains, so the app never reports a false success) ----
 import time as _t
 _t.sleep(5)
@@ -118,11 +134,23 @@ for _ in range(100):
     _sp += r.get("spaces", []); _tok = r.get("next_page_token")
     if not _tok:
         break
-_left += [f"Genie agent: {s['title']}" for s in _sp if s.get("title", "").startswith("SC - ")]
+for s in _sp:
+    _t = s.get("title", "")
+    if not _t.startswith("SC - "):
+        continue
+    # Only flag agents that belong to this user (or all if no alias)
+    if USER_ALIAS and f"({USER_ALIAS})" not in _t:
+        continue
+    _left.append(f"Genie agent: {_t}")
 r = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers)
 if r.status_code == 200:
-    _left += [f"Supervisor: {a.get('display_name')}" for a in r.json().get("supervisor_agents", [])
-              if "Supply Chain" in a.get("display_name", "") or "Control Tower" in a.get("display_name", "")]
+    for a in r.json().get("supervisor_agents", []):
+        _dn = a.get("display_name", "")
+        if not ("Supply Chain" in _dn or "Control Tower" in _dn):
+            continue
+        if USER_ALIAS and f"({USER_ALIAS})" not in _dn:
+            continue
+        _left.append(f"Supervisor: {_dn}")
 _cats = {c["name"].lower() for c in requests.get(f"{host}/api/2.1/unity-catalog/catalogs", headers=headers).json().get("catalogs", [])}
 _left += [f"Catalog: {c}" for c in _catalogs if c.lower() in _cats]
 print("UC Domains + Pages: created manually on the Discover page -- not removed by this job.")

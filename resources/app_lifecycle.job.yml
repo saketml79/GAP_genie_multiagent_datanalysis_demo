@@ -1,0 +1,43 @@
+# App Lifecycle Manager — auto-stop idle apps to save cost
+# Start-on-access is handled externally (Azure Function proxy);
+# this job only checks for idle apps and stops them.
+
+resources:
+  jobs:
+    app_lifecycle_manager:
+      name: "App Lifecycle Manager"
+      description: |
+        Cost optimization: checks the Databricks App for user activity
+        every 2 hours and stops it if idle (no HTTP requests in the log
+        window). Start-on-access is handled by an external Azure Function
+        proxy — not by this job.
+      tags:
+        project: gap_supply_chain_demo
+        purpose: cost_optimization
+
+      tasks:
+        - task_key: check_idle_and_stop
+          description: "Check app logs for recent user activity; stop if idle"
+          notebook_task:
+            notebook_path: ../src/notebooks/app_lifecycle_manager.ipynb
+            base_parameters:
+              app_name: "genie-curator-workbench"
+              action: "check_idle"
+              idle_minutes: "60"
+          environment_key: default
+
+      schedule:
+        quartz_cron_expression: "0 0 * * * ?"
+        timezone_id: "America/New_York"
+        pause_status: UNPAUSED
+
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+
+      max_concurrent_runs: 1

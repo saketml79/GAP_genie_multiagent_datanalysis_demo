@@ -11,11 +11,11 @@ env:
   - name: TEARDOWN_JOB_ID
     value: "154776446737504"
   - name: ITER1_SUPERVISOR_JOB_ID
-    value: "259736012262518"
+    value: "336297947765121"
   - name: ITER2_SUPERVISOR_JOB_ID
-    value: "1094064836949489"
+    value: "181572544501490"
   - name: ITER3_SUPERVISOR_JOB_ID
-    value: "284642880322775"
+    value: "795175593808667"
   - name: SRC_DIR
     value: /Workspace/Users/ssuman@bpcs.com/GAP_genie_multiagent_datanalysis_demo/src
 resources:
@@ -29,15 +29,15 @@ resources:
       permission: CAN_MANAGE_RUN
   - name: iter1-supervisor-job
     job:
-      id: "259736012262518"
+      id: "336297947765121"
       permission: CAN_MANAGE_RUN
   - name: iter2-supervisor-job
     job:
-      id: "1094064836949489"
+      id: "181572544501490"
       permission: CAN_MANAGE_RUN
   - name: iter3-supervisor-job
     job:
-      id: "284642880322775"
+      id: "795175593808667"
       permission: CAN_MANAGE_RUN
   - name: sql-warehouse
     sql_warehouse:

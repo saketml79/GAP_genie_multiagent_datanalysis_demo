@@ -16,7 +16,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from iterations import run_iteration_1, run_iteration_2, run_iteration_3, clone_agents
 
 # ---- Config ----------------------------------------------------------------
-CATALOG = os.getenv("CATALOG_NAME", "GAP_Demo_Dev")
+BASE_CATALOG = os.getenv("CATALOG_NAME", "GAP_Demo_Dev")
+# Per-user sandbox: derived at request time from OBO token
+CATALOG = BASE_CATALOG  # module-level fallback; callbacks use user_catalog()
 WAREHOUSE_ID = os.getenv("WAREHOUSE_ID", "")  # from app.yaml — no hardcoded default
 SRC_DIR = os.getenv("SRC_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # env var preferred; __file__ fallback for local dev
 SETUP_JOB_ID = os.getenv("SETUP_JOB_ID", "")
@@ -30,7 +32,7 @@ ITER_SUPERVISOR_JOB_IDS = {
     "it3": ITER3_SUPERVISOR_JOB_ID,
 }
 
-from flask import request as flask_request
+from flask import request as flask_request, jsonify as _jsonify
 
 # Workspace host
 try:
@@ -85,6 +87,29 @@ def _get_user_from_headers(headers):
         claims = json.loads(_b64.urlsafe_b64decode(padded))
         return claims.get("email") or claims.get("upn") or claims.get("sub", "?")
     return "?"
+
+def _get_user_alias(headers=None):
+    """Sanitised alias from OBO email: ssuman@bpcs.com -> ssuman_bpcs_com."""
+    h = headers or (get_headers() if _in_request() else {})
+    email = _get_user_from_headers(h)
+    if email and email != "?":
+        return email.replace("@", "_").replace(".", "_")
+    return "unknown"
+
+def _in_request():
+    try:
+        _ = flask_request.headers
+        return True
+    except RuntimeError:
+        return False
+
+def user_catalog(headers=None):
+    """Per-user catalog: GAP_Demo_Dev_ssuman_bpcs_com."""
+    return f"{BASE_CATALOG}_{_get_user_alias(headers)}"
+
+def user_agent_tag(headers=None):
+    """Short alias for agent/supervisor names, e.g. 'ssuman_bpcs_com'."""
+    return _get_user_alias(headers)
 
 def get_headers():
     """OBO only: use the logged-in user's token for ALL API calls."""
@@ -267,9 +292,18 @@ def score_response(text):
 
 # ---- API Helpers -----------------------------------------------------------
 AGENT_VERSIONS = ["Baseline", "Iteration 1", "Iteration 2", "Iteration 3"]
-_AGENT_TITLE_PREFIX = {"demand": "SC - Demand Analysis", "inventory": "SC - Inventory Management",
-                       "logistics": "SC - Logistics Operations", "supplier": "SC - Supplier Risk",
-                       "executive": "SC - Executive Reporting"}
+_AGENT_TITLE_PREFIX_BASE = {"demand": "SC - Demand Analysis", "inventory": "SC - Inventory Management",
+                            "logistics": "SC - Logistics Operations", "supplier": "SC - Supplier Risk",
+                            "executive": "SC - Executive Reporting"}
+# Legacy alias kept for code that doesn't need per-user scoping
+_AGENT_TITLE_PREFIX = _AGENT_TITLE_PREFIX_BASE
+
+def _user_agent_prefix(alias=None):
+    """Per-user agent title prefix: 'SC - Demand Analysis (ssuman_bpcs_com)'."""
+    tag = alias or (user_agent_tag() if _in_request() else None)
+    if tag and tag != "unknown":
+        return {k: f"{v} ({tag})" for k, v in _AGENT_TITLE_PREFIX_BASE.items()}
+    return _AGENT_TITLE_PREFIX_BASE
 
 
 def _list_all_genie_spaces(h):
@@ -288,16 +322,18 @@ def _list_all_genie_spaces(h):
     return spaces, None
 
 
-def _group_agent_versions(spaces):
+def _group_agent_versions(spaces, alias=None):
     """{version: {agent: space_id}} for Baseline / Iteration 1-3.
-    Title must be "SC - <Agent> - <Version>" or that plus a suffix Genie adds for duplicate
-    titles (" 2026-10-11 20:36:20"). If several match, the NEWEST (create_time) wins --
-    older copies are leftovers a teardown missed."""
+    Title must be "SC - <Agent> (<alias>) - <Version>".
+    Plus optional Genie duplicate suffix (" 2026-10-11 20:36:20").
+    If several match, the NEWEST (create_time) wins.
+    Strict: only matches user-scoped titles when alias is provided."""
     versions, best = {}, {}
+    pfx_map = _user_agent_prefix(alias)  # includes (alias) when alias is set
     for s in spaces:
         t = s.get("title", "")
         for ver in AGENT_VERSIONS:
-            for agent, prefix in _AGENT_TITLE_PREFIX.items():
+            for agent, prefix in pfx_map.items():
                 base = f"{prefix} - {ver}"
                 if not (t == base or t.startswith(base + " 20")):
                     continue
@@ -318,14 +354,17 @@ def discover_agents(headers=None):
         log(f"discover_agents: genie API HTTP {err.status_code}: {err.text[:200]}")
         return {}
     log(f"discover_agents: {len(spaces)} total genie agents")
-    versions = _group_agent_versions(spaces)
+    alias = _get_user_alias(h)
+    versions = _group_agent_versions(spaces, alias=alias)
     ST["agent_versions"] = versions
+    ST["user_alias"] = alias
     if versions:
         log("discover_agents: versions " + ", ".join(f"{v}={len(a)}" for v, a in versions.items()))
     if len(versions.get("Baseline", {})) == 5:
         log("discover_agents: 5 SC domain agents found (Baseline)")
         return dict(versions["Baseline"])
     # Collect ALL SC agents (any label), group by domain, latest wins
+    # Filter by user alias to avoid picking up other users' agents
     domain_kw = [("demand","Demand"),("inventory","Inventory"),("logistics","Logistics"),
                  ("supplier","Supplier"),("executive","Executive")]
     found = {}
@@ -333,11 +372,16 @@ def discover_agents(headers=None):
         t = s.get("title", "")
         if "SC" not in t or "Evaluator" in t:
             continue
+        # Strict: only match user-scoped agents when alias is set
+        if alias and alias != "unknown" and f"({alias})" not in t:
+            continue
         sid = s["space_id"]
         for k, kw in domain_kw:
             if kw in t:
                 found[k] = sid  # last match wins (spaces ordered by creation)
-    log(f"discover_agents: {len(found)} SC domain agents found")
+    if not found and alias and alias != "unknown":
+        log(f"discover_agents: WARNING — no agents found for alias={alias}. Run Setup to create them.")
+    log(f"discover_agents: {len(found)} SC domain agents found (alias={alias})")
     return found
 
 def _sync_agent_warehouses(agents, headers=None):
@@ -366,13 +410,19 @@ def _sync_agent_warehouses(agents, headers=None):
 
 
 # ---- Persistent benchmark storage ------------------------------------------
-_BENCH_TABLE = f"{CATALOG}.workbench.benchmark_runs"
+def _bench_table(headers=None):
+    """Per-user benchmark table: GAP_Demo_Dev_ssuman_bpcs_com.workbench.benchmark_runs."""
+    cat = user_catalog(headers) if _in_request() or headers else CATALOG
+    return f"{cat}.workbench.benchmark_runs"
+_BENCH_TABLE = f"{CATALOG}.workbench.benchmark_runs"  # module-level fallback
 
 def _ensure_workbench_tables(headers=None):
     """Create workbench schema + benchmark_runs table if not exist. OBO."""
     h = headers or get_headers()
-    ok1, _ = run_sql(f"CREATE SCHEMA IF NOT EXISTS `{CATALOG}`.workbench", h)
-    ok2, _ = run_sql(f"""CREATE TABLE IF NOT EXISTS {_BENCH_TABLE} (
+    cat = user_catalog(h) if _in_request() or headers else CATALOG
+    bt = _bench_table(h)
+    ok1, _ = run_sql(f"CREATE SCHEMA IF NOT EXISTS `{cat}`.workbench", h)
+    ok2, _ = run_sql(f"""CREATE TABLE IF NOT EXISTS {bt} (
         run_id STRING, stage STRING, run_ts TIMESTAMP, user_email STRING,
         score INT, total INT, exact_count INT, tolerant_count INT,
         elapsed_secs DOUBLE, total_tokens BIGINT, results_json STRING
@@ -400,7 +450,8 @@ def _save_benchmark_run(label, results, elapsed, tokens, user_email, headers=Non
         safe.append({k: str(v) if v is not None else "" for k, v in r.items()})
     # Spark SQL: '' is NOT an escaped quote (adjacent literals concatenate, apostrophe lost) -> use \'
     rj = json.dumps(safe).replace("\\", "\\\\").replace("'", "\\'")
-    stmt = f"""INSERT INTO {_BENCH_TABLE} VALUES (
+    bt = _bench_table(h)
+    stmt = f"""INSERT INTO {bt} VALUES (
         '{run_id}', '{label}', CURRENT_TIMESTAMP(), '{user_email}',
         {score}, {len(results)}, {exact}, {tolerant},
         {elapsed:.2f}, {tokens}, '{rj}'
@@ -435,7 +486,8 @@ def _save_comparison_run(ea, eb, sa, sb, elapsed, user_email, headers=None):
     pa = sum(1 for r in payload["a"]["results"] if r.get("verdict") in ("EXACT", "TOLERANT"))
     total = len(payload["a"]["results"])
     rj = json.dumps(payload, default=str).replace("\\", "\\\\").replace("'", "\\'")
-    stmt = f"""INSERT INTO {_BENCH_TABLE} VALUES (
+    bt = _bench_table(h)
+    stmt = f"""INSERT INTO {bt} VALUES (
         '{_uuid.uuid4()}', 'Comparison', CURRENT_TIMESTAMP(), '{user_email}',
         {pa}, {total}, 0, 0, {elapsed:.2f}, 0, '{rj}'
     )"""
@@ -462,7 +514,8 @@ def _save_reliability_run(headers=None):
                "results": res, "log": (ST.get("rob_log") or [])[-200:]}
     rj = json.dumps(payload, default=str).replace("\\", "\\\\").replace("'", "\\'")
     user = str(ST.get("rob_last_user") or "").replace("'", "")
-    stmt = f"""INSERT INTO {_BENCH_TABLE} VALUES (
+    bt = _bench_table(h)
+    stmt = f"""INSERT INTO {bt} VALUES (
         '{_uuid.uuid4()}', 'Reliability', CURRENT_TIMESTAMP(), '{user}',
         {rel}, 100, {dep}, 0, {max(t1 - t0, 0):.2f}, 0, '{rj}'
     )"""
@@ -509,10 +562,11 @@ def _load_persisted_state(headers=None):
     """Load benchmark history from Delta table into ST on startup."""
     h = headers or get_headers()
     try:
+        bt = _bench_table(h)
         rows = run_sql_query(f"""
             SELECT stage, score, total, exact_count, tolerant_count,
                    elapsed_secs, total_tokens, run_ts, user_email, results_json
-            FROM {_BENCH_TABLE}
+            FROM {bt}
             ORDER BY run_ts DESC
         """, h, timeout=30)
         if not rows:
@@ -639,23 +693,39 @@ def discover_supervisors(headers=None):
     """Discover supervisor agents (OBO).
     Tries supervisor-agents API, then serving endpoints."""
     h = headers or get_headers()
+    if "Authorization" not in h:
+        log("discover_supervisors: skipped — no OBO token yet (will retry on next poll)")
+        return ST.get("supervisors", [])  # return cached data, don't overwrite with empty
     found = []
     # Try supervisor-agents API
     try:
         r = requests.get(f"{HOST}/api/2.1/supervisor-agents", headers=h, timeout=15)
-        ST["sup_api_status"] = r.status_code
+        # Only update status when we got a real response (not a missing-auth 403)
+        if r.status_code != 403:
+            ST["sup_api_status"] = r.status_code
+        elif not ST.get("sup_api_status") or ST.get("sup_api_status") == 200:
+            # First 403 or regression from 200 — store but log loudly
+            ST["sup_api_status"] = r.status_code
+            log(f"discover_supervisors: supervisor-agents API returned 403 (token may lack permission)")
         if r.status_code == 200:
             all_sups = r.json().get("supervisor_agents", [])
             log(f"discover_supervisors: {len(all_sups)} supervisor agents from API")
-            for s in all_sups:
+            alias = _get_user_alias(h)
+            sc_sups = [s for s in all_sups if "Supply Chain" in s.get("display_name", "") or "supply chain" in s.get("display_name", "").lower()]
+            # Strict: only match user-scoped supervisors when alias is set
+            if alias and alias != "unknown":
+                user_sups = [s for s in sc_sups if f"({alias})" in s.get("display_name", "")]
+                if not user_sups:
+                    log(f"discover_supervisors: WARNING — no supervisors found for alias={alias}. Run Setup to create them.")
+                sc_sups = user_sups  # empty list if none match — no silent fallback
+            for s in sc_sups:
                 dn = s.get("display_name", "")
-                if "Supply Chain" in dn or "supply chain" in dn.lower():
-                    found.append(dict(name=s["name"], display_name=dn,
-                                      endpoint=s.get("endpoint_name",""),
-                                      desc=s.get("description","")[:80],
-                                      desc_full=s.get("description",""),
-                                      create_time=s.get("create_time",""),
-                                      tools=_fetch_supervisor_tools(h, s["name"])))
+                found.append(dict(name=s["name"], display_name=dn,
+                                  endpoint=s.get("endpoint_name",""),
+                                  desc=s.get("description","")[:80],
+                                  desc_full=s.get("description",""),
+                                  create_time=s.get("create_time",""),
+                                  tools=_fetch_supervisor_tools(h, s["name"])))
         else:
             log(f"Supervisor API: HTTP {r.status_code} (falling back to serving endpoints)")
     except Exception as e:
@@ -744,13 +814,16 @@ def run_sql_query(statement, headers=None, timeout=60):
         log(f"SQL Statement API HTTP {r.status_code}: {r.text[:200]}")
     return []
 
-def trigger_job(job_id, headers=None, notebook_params=None):
+def trigger_job(job_id, headers=None, notebook_params=None, python_params=None):
     """Trigger a pre-created job via run-now. The job has run_as=user, so it runs
-    as the logged-in user with their full UC permissions. Returns (run_id, error)."""
+    as the logged-in user with their full UC permissions. Returns (run_id, error).
+    python_params: for spark_python_task jobs, overrides ALL CLI args."""
     h = headers or get_sp_headers()
     body = {"job_id": int(job_id)}
     if notebook_params:
         body["notebook_params"] = notebook_params
+    if python_params:
+        body["python_params"] = python_params
     r = requests.post(f"{HOST}/api/2.1/jobs/run-now", headers=h,
                       json=body, timeout=30)
     if r.status_code == 200:
@@ -868,12 +941,19 @@ def _run_supervisor_refresh_job(iter_key, tok, _log_step):
     if not job_id:
         _log_step(f"\u26a0 Supervisor NOT updated: no job ID configured for {iter_key} (app.yaml)")
         return None
-    _log_step(f"Updating Supervisor via job {job_id} (runs as you)...")
-    rid, err = trigger_job(job_id)
+    _alias = ST.get("user_alias") or ""
+    _cat = ST.get("user_catalog") or CATALOG
+    _iter_num = iter_key.replace("it", "")
+    _params = ["--mode", "supervisor-job",
+               "--iteration", _iter_num,
+               "--catalog", _cat,
+               "--user-alias", _alias]
+    _log_step(f"Updating Supervisor via job {job_id} (runs as you, alias={_alias})...")
+    rid, err = trigger_job(job_id, python_params=_params)
     if err or not rid:
         _log_step(f"\u26a0 Supervisor NOT updated: could not trigger job {job_id}: {err or 'unknown error'}")
         return None
-    _log_step(f"  Supervisor job run_id={rid}")
+    _log_step(f"  Supervisor job run_id={rid}  \u2192 {HOST}/#job/{job_id}/run/{rid}")
     h = get_sp_headers()
     t0 = time.time()
     while time.time() - t0 < 1800:
@@ -1011,6 +1091,18 @@ def call_supervisor_stream(ep, prompt, headers=None, on_step=None, max_tokens=81
             elif et in ("response.completed", "response.done"):
                 usage = (ev.get("response") or {}).get("usage", {}) or usage
         if not cont:
+            # Fallback: supervisor generated "Continue / Wrap up" text instead of a proper
+            # task_continue_request. Detect it and auto-send "continue" as the user would.
+            _round_text = deltas.get(last_delta_id, "") if last_delta_id else ""
+            if not _round_text and messages:
+                _round_text = messages[-1][1]
+            if _is_supervisor_time_limit(_round_text) and _round < SUP_MAX_CONTINUATIONS:
+                emit("progress", f"Supervisor hit 290s window — sending 'continue' automatically (round {_round + 1})")
+                # Strip the timeout text from accumulated answer; it's not a real response
+                if last_delta_id and last_delta_id in deltas:
+                    deltas[last_delta_id] = ""
+                convo = convo + round_items + [{"role": "user", "content": "continue"}]
+                continue
             break
         emit("progress", f"Supervisor checkpoint after {cont.get('step', '?')} tool steps \u2014 continuing automatically")
         convo = convo + round_items + [cont, {"type": "task_continue_response", "continue_request_id": cont["id"]}]
@@ -1030,11 +1122,15 @@ def call_supervisor_stream(ep, prompt, headers=None, on_step=None, max_tokens=81
 
 def teardown_agents(keep_label=None):
     h = get_headers()
+    alias = _get_user_alias(h)
     r = requests.get(f"{HOST}/api/2.0/genie/spaces", headers=h)
     deleted, kept, errors = [], [], []
     for s in r.json().get("spaces", []):
         t = s.get("title", "")
         if "SC" not in t: continue
+        # Scope to user's agents
+        if alias and alias != "unknown" and f"({alias})" not in t:
+            continue
         if keep_label and (keep_label in t or "Evaluator" in t):
             kept.append(t)
             continue
@@ -1047,6 +1143,7 @@ def teardown_agents(keep_label=None):
 
 def teardown_supervisors():
     h = get_headers()
+    alias = _get_user_alias(h)
     deleted, errors = [], []
     try:
         r = requests.get(f"{HOST}/api/2.1/supervisor-agents", headers=h, timeout=15)
@@ -1054,7 +1151,11 @@ def teardown_supervisors():
             return [], [f"List failed: HTTP {r.status_code} - {r.text[:120]}"]
         for s in r.json().get("supervisor_agents", []):
             dn = s.get("display_name", "")
-            if "Supply Chain" in dn or "supply chain" in dn.lower():
+            if not ("Supply Chain" in dn or "supply chain" in dn.lower()):
+                continue
+            if alias and alias != "unknown" and f"({alias})" not in dn:
+                continue
+            if True:
                 dr = requests.delete(f"{HOST}/api/2.1/{s['name']}", headers=h)
                 if dr.status_code in (200, 204):
                     deleted.append(dn)
@@ -1184,6 +1285,71 @@ app = dash.Dash(__name__, external_stylesheets=[FONTS_URL],
                update_title=None)  # keep tab title fixed (Dash default flips it to "Updating..." on every poll)
 server = app.server
 
+# ---- Activity heartbeat (for idle-stop job) --------------------------------
+# The lifecycle job needs to know if the app has real user traffic.
+# We track in memory and also persist via the SQL Statement API to a
+# lightweight Delta table the job can SELECT from.
+_last_user_activity = time.time()
+_HB_INTERVAL       = 300           # persist at most once per 5 min
+_last_hb_persist    = 0
+_hb_table_ready     = False         # set after first CREATE TABLE succeeds
+_WH_ID = os.getenv("DATABRICKS_WAREHOUSE_ID", "e3a0fc2c08db05bb")
+
+def _sql_fire(sql, wait="0s"):
+    """Execute SQL via Statement API. wait='0s' = async (fire-and-forget)."""
+    h = get_sp_headers()
+    requests.post(f"{HOST}/api/2.0/sql/statements", headers=h, json={
+        "warehouse_id": _WH_ID, "statement": sql, "wait_timeout": wait,
+    }, timeout=5)
+
+def _persist_heartbeat():
+    """Best-effort: upsert a single-row heartbeat via SQL Statement API."""
+    global _last_hb_persist, _hb_table_ready
+    now_t = time.time()
+    if now_t - _last_hb_persist < _HB_INTERVAL:
+        return
+    _last_hb_persist = now_t
+    try:
+        # Always write to the SHARED monitoring catalog (not user-scoped) so the
+        # lifecycle job has a single well-known table to check.
+        _HB_CATALOG = "gap_demo_dev_app_monitoring"
+        tbl = f"{_HB_CATALOG}.genie_workbench.app_heartbeat"
+        ts  = datetime.utcnow().isoformat()
+        usr = ST.get("user_alias") or "unknown"
+        # Ensure table exists (once per app lifetime)
+        if not _hb_table_ready:
+            _sql_fire(f"CREATE CATALOG IF NOT EXISTS {_HB_CATALOG}", wait="10s")
+            _sql_fire(f"CREATE SCHEMA IF NOT EXISTS {_HB_CATALOG}.genie_workbench", wait="10s")
+            _sql_fire(f"CREATE TABLE IF NOT EXISTS {tbl} "
+                      f"(app STRING, ts TIMESTAMP, user STRING) USING DELTA",
+                      wait="10s")
+            _hb_table_ready = True
+        # Upsert the heartbeat row (async — don't block the request)
+        _sql_fire(
+            f"MERGE INTO {tbl} AS t "
+            f"USING (SELECT 'genie-curator-workbench' AS app, "
+            f"TIMESTAMP '{ts}' AS ts, '{usr}' AS user) AS s "
+            f"ON t.app = s.app "
+            f"WHEN MATCHED THEN UPDATE SET t.ts = s.ts, t.user = s.user "
+            f"WHEN NOT MATCHED THEN INSERT *"
+        )
+    except Exception:
+        pass  # never block a user request for telemetry
+
+@server.before_request
+def _track_activity():
+    """Record every inbound request; periodically persist to Delta."""
+    global _last_user_activity
+    _last_user_activity = time.time()
+    _persist_heartbeat()
+
+@server.route("/heartbeat")
+def _heartbeat_endpoint():
+    """In-app diagnostic (behind OAuth)."""
+    idle = time.time() - _last_user_activity
+    return _jsonify({"last_activity_utc": datetime.utcfromtimestamp(_last_user_activity).isoformat() + "Z",
+                     "idle_seconds": int(idle), "user": ST.get("user_alias") or "?"})
+
 # ---- CSS (matches Gap_workshp_.html tokens) --------------------------------
 _CSS = f"""
 /* Light (default) */
@@ -1247,8 +1413,8 @@ code{{font-family:var(--mono);font-size:.86em}}
 .btn.rose:hover{{opacity:.85}}
 .btn.danger{{border-color:var(--rose);color:var(--rose)}}
 .btn.danger:hover{{background:var(--rose-bg)}}
-.btn:disabled,.btn[disabled]{{cursor:not-allowed!important}}
-.btn:disabled:hover{{color:var(--muted);background:none;opacity:inherit}}
+.btn:disabled,.btn[disabled]{{cursor:not-allowed!important;opacity:0.4!important;pointer-events:none}}
+.btn:disabled:hover{{color:var(--muted);background:none;opacity:0.4!important}}
 
 /* --- output screen (from HTML .screen) --- */
 .screen{{background:var(--surface);border:1px solid var(--line);border-radius:22px;overflow:hidden;box-shadow:0 18px 40px -28px rgba(21,32,58,.35);display:flex;flex-direction:column}}
@@ -1384,10 +1550,11 @@ code{{font-family:var(--mono);font-size:.86em}}
 .cmp-md code{{font-family:var(--mono);font-size:12px;background:var(--soft);padding:1px 4px;border-radius:4px}}
 .cmp-sql{{font-family:var(--mono);font-size:11.5px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--indigo);border-radius:8px;padding:8px 10px;margin:4px 0 0;color:var(--ink);max-height:260px;overflow:auto}}
 .cmp-md pre{{white-space:pre-wrap;word-break:break-word;background:var(--soft);padding:8px 10px;border-radius:8px;font-size:11.5px}}
-.cmp-md table{{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:8px 0;font-size:12.5px}}
-.cmp-md th{{background:var(--indigo-bg);color:var(--indigo);font-weight:700;text-align:left;padding:6px 10px;border:1px solid var(--line);white-space:nowrap}}
+.cmp-md table{{display:block;max-width:100%;overflow-x:auto;overflow-y:auto;max-height:400px;border-collapse:collapse;margin:8px 0;font-size:12.5px}}
+.cmp-md th{{background:var(--indigo-bg);color:var(--indigo);font-weight:700;text-align:left;padding:6px 10px;border:1px solid var(--line);white-space:nowrap;position:sticky;top:0;z-index:1}}
 .cmp-md td{{padding:5px 10px;border:1px solid var(--line);font-variant-numeric:tabular-nums}}
 .cmp-md tr:nth-child(even) td{{background:var(--soft)}}
+.cmp-md mark{{background:rgba(20,184,166,0.18);color:var(--ink);padding:1px 3px;border-radius:4px;text-decoration:underline;text-decoration-color:var(--teal);text-underline-offset:2px;font-weight:600;cursor:help}}
 .cmp-md-sm{{font-size:12px}} .cmp-md-sm p{{margin:2px 0;color:var(--muted)}} .cmp-md-sm table{{font-size:11.5px;margin:4px 0}}
 .chat-bubble th{{text-align:left;padding:6px 10px;background:var(--soft);border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase}}
 .chat-bubble td{{padding:6px 10px;border-bottom:1px solid var(--line)}}
@@ -1504,7 +1671,7 @@ def make_header():
                 html.Span("\u2b22", style={"fontSize":"22px","color":C["indigo"]}),
                 html.Span("Genie Curator Workbench"),
             ], className="brand"),
-            Chip(f"Catalog: {CATALOG}"),
+            Chip(f"Catalog: {ST.get('user_catalog') or CATALOG}"),
             html.Div(id="wh-chip", children=Chip("WH: checking...")),
             html.Button("\u263e", id="theme-toggle", className="theme-btn",
                         title="Toggle light / dark theme", n_clicks=0),
@@ -1811,15 +1978,16 @@ def update_wh_chip(n, current_tab):
             ST["_cat_checking"], ST["_cat_last_try"] = True, time.time()
             try:
                 rows = run_sql_query(
-                    f"SELECT COUNT(*) as n FROM `{CATALOG}`.information_schema.tables",
+                    f"SELECT COUNT(*) as n FROM `{user_catalog()}`.information_schema.tables",
                     headers=get_headers()
                 )
                 if rows:
                     ST["table_count"] = int(rows[0].get("n", 0))
                     ST["catalog_exists"] = True
-                    log(f"Catalog verified: {CATALOG} has {ST['table_count']} tables")
+                    ST["user_catalog"] = user_catalog()
+                    log(f"Catalog verified: {user_catalog()} has {ST['table_count']} tables")
                 else:
-                    log(f"Catalog check: no result for {CATALOG} yet -- will retry")
+                    log(f"Catalog check: no result for {user_catalog()} yet -- will retry")
             except Exception as e:
                 log(f"Catalog check deferred: {e}")
             finally:
@@ -2577,14 +2745,14 @@ def _build_state_cards():
         dep_detail = "Waiting for warehouse…" if wh_starting else "Warehouse not running"
         return html.Div([
             card("WAREHOUSE", wh_name, wh_detail, wh_st),
-            card("CATALOG", CATALOG, dep_detail, dep_st),
+            card("CATALOG", ST.get('user_catalog') or CATALOG, dep_detail, dep_st),
             card("DOMAIN AGENTS", _agent_count_summary(agents)[0] or "—", dep_detail if not agents else _agent_count_summary(agents)[1], dep_st if not agents else "alive"),
             card("SUPERVISORS", len(sups) or "—", dep_detail if not sups else ", ".join(_sup_title(s, f"Supervisor {chr(65 + k)}") for k, s in enumerate(sups)), dep_st if not sups else "alive"),
             card("SCHEMAS", "—", dep_detail, dep_st),
         ], className="state-grid")
     return html.Div([
         card("WAREHOUSE", wh_name, wh_detail, wh_st),
-        card("CATALOG", CATALOG, cat_detail, "alive" if catalog_exists else "gone"),
+        card("CATALOG", ST.get('user_catalog') or CATALOG, cat_detail, "alive" if catalog_exists else "gone"),
         card("DOMAIN AGENTS", _agent_count_summary(agents)[0], _agent_count_summary(agents)[1] if agents else "None discovered", "alive" if agents else "gone"),
         card("SUPERVISORS", len(sups), ", ".join(_sup_title(s, f"Supervisor {chr(65 + k)}") for k, s in enumerate(sups)) if sups else "None discovered", "alive" if sups else "gone"),
         card("SCHEMAS", "6" if catalog_exists else "0", "demand, inventory, logistics, supplier, reporting, action_intelligence" if catalog_exists else "Catalog missing", "alive" if catalog_exists else "gone"),
@@ -2607,7 +2775,7 @@ def _teardown_scope_card():
         html.Div("Deletes", style={**lab, "color": C["rose"]}),
         item("\u2715", "rose", "All SC Genie agents", "every version: Baseline, Iteration 1, 2, 3 and the Evaluator"),
         item("\u2715", "rose", "Supervisors", "Control Tower and MCP supervisor, plus their serving endpoints"),
-        item("\u2715", "rose", f"Catalog {CATALOG}", "DROP CATALOG CASCADE: all schemas, tables, views, metric views, "
+        item("\u2715", "rose", f"Catalog {ST.get('user_catalog') or CATALOG}", "DROP CATALOG CASCADE: all schemas, tables, views, metric views, "
              "functions and saved run history"),
         html.Div("Keeps", style={**lab, "color": C["teal"], "marginTop": "10px"}),
         item("\u2713", "teal", "UC Domains + Pages", "created by hand on the Discover page; delete them there if needed"),
@@ -2632,6 +2800,10 @@ def page_setup():
         ("06_create_reporting_views","Create executive reporting views"),
         ("08_setup_genie_supervisor","Create 5 Genie Agents + 2 Supervisors + Evaluator"),
     ]
+    # Teardown button initial state — disable when nothing to delete
+    _td_has_agents = bool(ST.get("agents"))
+    _td_has_sups = bool(ST.get("supervisors"))
+    _td_has_anything = _td_has_agents or _td_has_sups or ST.get("catalog_exists")
     return html.Div([
         html.H2("Setup & Teardown"),
         html.P("Manage the full environment lifecycle: provision, configure, and reset.",
@@ -2653,20 +2825,25 @@ def page_setup():
                 html.Div([
                     html.Div([
                         html.Button("Full Teardown (Agents + Supervisors + Catalog)", id="td-everything", className="btn danger",
-                                    style={"fontWeight":"700","fontSize":"15px","padding":"12px 28px"}),
+                                    disabled=not _td_has_anything,
+                                    style={"fontWeight":"700","fontSize":"15px","padding":"12px 28px",
+                                           "opacity":"1" if _td_has_anything else "0.4"}),
                     ], style={"marginBottom":"14px"}),
                     _teardown_scope_card(),
                     html.Div([
-                        html.Button("Delete Non-Iter-3 Agents Only", id="td-agents", className="btn danger"),
-                        html.Button("Delete ALL SC Agents Only", id="td-all", className="btn danger"),
-                        html.Button("Delete Supervisors Only", id="td-sups", className="btn danger"),
+                        html.Button("Delete Non-Iter-3 Agents Only", id="td-agents", className="btn danger",
+                                    disabled=not _td_has_agents),
+                        html.Button("Delete ALL SC Agents Only", id="td-all", className="btn danger",
+                                    disabled=not _td_has_agents),
+                        html.Button("Delete Supervisors Only", id="td-sups", className="btn danger",
+                                    disabled=not _td_has_sups),
                     ], className="btn-row"),
                 ], style={"flex":"6","minWidth":"0"}),
                 # Right column — 40%: output box fills exactly the height of the left column
                 html.Div([
                     dcc.Interval(id="td-poll", interval=1500, disabled=True),
                     html.Div(Screen("Teardown Output", "td-out", height="100%",
-                                    initial_content="\n".join(ST.get("td_log", [])) if ST.get("td_log") else None,
+                                    initial_content=_linkify_log_block(ST.get("td_log", [])) if ST.get("td_log") else None,
                                     clear_id="td-clear"),
                              style={"position":"absolute","inset":"0"}),
                 ], style={"flex":"4","minWidth":"300px","marginLeft":"20px","position":"relative"}),
@@ -2715,7 +2892,7 @@ def page_setup():
                 html.Div([
                     dcc.Interval(id="setup-poll", interval=2000, disabled=True),
                     Screen("Setup Output", "setup-out", height="418px",
-                           initial_content="\n".join(ST.get("setup_log", [])) if ST.get("setup_log") else None,
+                           initial_content=_linkify_log_block(ST.get("setup_log", [])) if ST.get("setup_log") else None,
                            clear_id="setup-clear"),
                 ], style={"flex":"4","minWidth":"300px","marginLeft":"20px"}),
             ], style={"display":"flex","gap":"0","alignItems":"flex-start"}),
@@ -2730,14 +2907,27 @@ def page_setup():
           Output("btn-setup","style"),
           Output("setup-btn-hint","children"),
           Output("setup-btn-hint","style"),
+          # Teardown buttons: disabled when nothing to tear down
+          Output("td-everything","disabled"),
+          Output("td-everything","style"),
+          Output("td-agents","disabled"),
+          Output("td-all","disabled"),
+          Output("td-sups","disabled"),
           Input("state-refresh","n_intervals"),
           prevent_initial_call=True)
 def auto_refresh_state(n):
-    """Periodically refresh environment state + setup button state."""
+    """Periodically refresh environment state + setup/teardown button state."""
     cards = _build_state_cards()
     has_agents = bool(ST.get("agents"))
+    has_sups = bool(ST.get("supervisors"))
+    has_catalog = bool(ST.get("catalog_exists"))
+    has_anything = has_agents or has_sups or has_catalog
     setup_running = ST.get("setup_running", False)
-    btn_disabled = has_agents or setup_running
+    td_running = ST.get("td_running", False)
+    # Setup button: disabled whenever ANYTHING exists OR setup/teardown running.
+    # Multiple signals prevent the flicker gap where discover_agents returns
+    # empty but the catalog already exists.
+    btn_disabled = has_anything or setup_running or td_running
     btn_cls = "btn" if btn_disabled else "btn primary"
     btn_style = {"fontWeight":"700","fontSize":"15px","padding":"12px 28px",
                  "opacity":"0.4" if btn_disabled else "1"}
@@ -2745,13 +2935,24 @@ def auto_refresh_state(n):
     if setup_running:
         hint = "Setup is running… check the output panel for live progress."
         hint_style = {**_hint_base, "color":C["teal"]}
-    elif has_agents:
-        hint = "Baseline exists — teardown first to re-run setup."
+    elif td_running:
+        hint = "Teardown is running…"
+        hint_style = {**_hint_base, "color":C["rose"]}
+    elif has_anything:
+        hint = "Environment exists — teardown first to re-run setup."
         hint_style = {**_hint_base, "color":C["rose"]}
     else:
         hint = f"Source: {SRC_DIR}"
         hint_style = {**_hint_base, "color":C["muted"]}
-    return cards, btn_disabled, btn_cls, btn_style, hint, hint_style
+    # Teardown buttons: disabled when nothing exists or teardown already running
+    td_full_off = not has_anything or td_running or setup_running
+    td_agents_off = not has_agents or td_running or setup_running
+    td_sups_off = not has_sups or td_running or setup_running
+    _td_full_style = {"fontWeight":"700","fontSize":"15px","padding":"12px 28px",
+                      "opacity":"0.4" if td_full_off else "1"}
+    return (cards, btn_disabled, btn_cls, btn_style, hint, hint_style,
+            td_full_off, _td_full_style,
+            td_agents_off, td_agents_off, td_sups_off)
 
 @_bg_guard("td_running")
 def _run_teardown_bg():
@@ -2770,12 +2971,16 @@ def _run_teardown_bg():
     _pre_sups = len(ST.get("supervisors") or [])
     lg.append("Triggering teardown job...")
     try:
-        rid, err = trigger_job(TEARDOWN_JOB_ID)
+        _cat = ST.get("user_catalog") or CATALOG
+        _alias = ST.get("user_alias") or "unknown"
+        rid, err = trigger_job(TEARDOWN_JOB_ID, notebook_params={
+            "catalog_name": _cat, "user_alias": _alias})
         if err:
             lg.append(f"  Trigger failed: {err}")
             ST["td_running"] = False
             return
-        lg.append(f"  Run ID: {rid}")
+        lg.append(f"  Run ID: {rid} (catalog={_cat})")
+        lg.append(f"  Job URL: {HOST}/#job/{TEARDOWN_JOB_ID}/run/{rid}")
         lg.append("  Job starting...")
         t0 = time.time()
         last_state = ""
@@ -2801,7 +3006,7 @@ def _run_teardown_bg():
                         if _pre_by_ver:
                             lg.append("      " + ", ".join(f"{v}: {n}" for v, n in _pre_by_ver.items()))
                         lg.append(f"  \u2713 {prev_s} supervisors deleted")
-                        lg.append(f"  \u2713 Catalog '{CATALOG}' dropped (all tables/views)")
+                        lg.append(f"  \u2713 Catalog '{_cat}' dropped (all tables/views)")
                         lg.append(f"  \u2713 Verified by the job: no SC agents, supervisors or demo catalog left")
                         lg.append(f"  \u2139 UC Domains + Pages are created by hand on the Discover page \u2014 delete them there")
                         lg.append("")
@@ -2859,7 +3064,7 @@ def handle_teardown(n0,n1,n2,n3):
             lg.append("")
         lg.append("Launching teardown...")
         threading.Thread(target=_run_teardown_bg, daemon=True).start()
-        return "\n".join(lg), no_update
+        return _linkify_log_block(lg), no_update
     if tid == "td-agents":
         deleted, kept, errors = teardown_agents(keep_label="Iteration 3")
         log(f"Teardown: {len(deleted)} deleted, {len(kept)} kept, {len(errors)} errors")
@@ -2902,14 +3107,14 @@ def handle_teardown(n0,n1,n2,n3):
           prevent_initial_call=True)
 def poll_teardown(n):
     lg = ST.get("td_log", [])
-    text = "\n".join(lg) if lg else "Waiting..."
+    text = _linkify_log_block(lg) if lg else "Waiting..."
     running = ST.get("td_running", False)
     if not running and lg:
-        # Teardown done — immediately enable setup button
-        has_agents = bool(ST.get("agents"))
-        btn_dis = has_agents  # False after successful teardown
+        # Teardown done — enable setup button only if environment is truly empty
+        _env = bool(ST.get("agents")) or bool(ST.get("supervisors")) or bool(ST.get("catalog_exists"))
+        btn_dis = _env
         btn_cls = "btn" if btn_dis else "btn primary"
-        hint = "Ready to run Setup" if not has_agents else "Baseline exists"
+        hint = "Ready to run Setup" if not _env else "Environment exists — teardown first to re-run setup."
         return text, _build_state_cards(), True, "scr-dot", btn_dis, btn_cls, hint
     return text, no_update, False, "scr-dot active", no_update, no_update, no_update
 
@@ -2951,7 +3156,7 @@ def clear_setup_log(n):
 
 # Task metadata for verbose logging
 SETUP_TASK_META = {
-    "create_catalog": {"num": 1, "name": "01_create_catalog_schemas", "desc": "Create catalog + 6 domain schemas", "detail": f"Creates {CATALOG} with schemas: demand_analysis, inventory_management, logistics_operations, supplier_procurement, reporting, action_intelligence"},
+    "create_catalog": {"num": 1, "name": "01_create_catalog_schemas", "desc": "Create catalog + 6 domain schemas", "detail": "Creates catalog with schemas: demand_analysis, inventory_management, logistics_operations, supplier_procurement, reporting, action_intelligence"},
     "gen_demand": {"num": 2, "name": "02_generate_demand_data", "desc": "Generate deterministic sales orders", "detail": "~20,142 sales orders (seed=42). Covers all regions, product families, order statuses."},
     "gen_inventory": {"num": 3, "name": "03_generate_inventory_data", "desc": "Generate inventory ledger", "detail": "~1,200 inventory positions (seed=43). SKU x warehouse safety stock levels."},
     "gen_logistics": {"num": 4, "name": "04_generate_logistics_data", "desc": "Generate shipments data", "detail": "~12,808 shipments (seed=44). Carrier performance, delay tracking, regional routing."},
@@ -2977,13 +3182,19 @@ def _run_setup_bg(obo_headers):
         lg.append("")
     def say(msg): lg.append(msg); ST["setup_log"] = lg
 
+    _cat = user_catalog(obo_headers)
+    _alias = _get_user_alias(obo_headers)
+    ST["user_catalog"] = _cat
+    ST["user_alias"] = _alias
+
     say("=" * 68)
     say("  FULL SETUP -- Curator Workbench")
     say("=" * 68)
     say(f"  Job ID:     {SETUP_JOB_ID}")
     say(f"  run_as:     ssuman@bpcs.com")
     say(f"  Compute:    Serverless")
-    say(f"  Catalog:    {CATALOG}")
+    say(f"  Catalog:    {_cat}")
+    say(f"  Alias:      {_alias}")
     say(f"  Source:     {SRC_DIR}")
     say(f"  Tasks:      {len(SETUP_TASK_ORDER)} steps")
     say("=" * 68 + "\n")
@@ -2994,7 +3205,8 @@ def _run_setup_bg(obo_headers):
         return
 
     say("[TRIGGER] Submitting job run...")
-    rid, err = trigger_job(SETUP_JOB_ID, notebook_params={"agent_label": "Baseline"})
+    rid, err = trigger_job(SETUP_JOB_ID, notebook_params={
+        "agent_label": "Baseline", "catalog_name": _cat, "user_alias": _alias})
     if err:
         say(f"[TRIGGER] FAILED: {err}")
         ST["setup_running"] = False
@@ -3062,7 +3274,7 @@ def _run_setup_bg(obo_headers):
                     ST["setup_tasks"][tk] = "done"
                 say(f"  SETUP COMPLETE  ({total_dur:.0f}s total)")
                 say(f"  {len(SETUP_TASK_ORDER)}/{len(SETUP_TASK_ORDER)} tasks passed")
-                say(f"  Catalog '{CATALOG}' built with all data + agents")
+                say(f"  Catalog '{_cat}' built with all data + agents")
                 say(f"  Next: run the {_NT()}-test baseline benchmark")
                 # Refresh cached state: re-discover agents, supervisors, catalog
                 try:
@@ -3071,7 +3283,7 @@ def _run_setup_bg(obo_headers):
                         _sync_agent_warehouses(ST["agents"], headers=obo_headers)
                     ST["supervisors"] = discover_supervisors(headers=obo_headers)
                     rows = run_sql_query(
-                        f"SELECT COUNT(*) as n FROM `{CATALOG}`.information_schema.tables",
+                        f"SELECT COUNT(*) as n FROM `{_cat}`.information_schema.tables",
                         headers=obo_headers
                     )
                     if rows:
@@ -3101,18 +3313,30 @@ def _run_setup_bg(obo_headers):
           Output("setup-steps","children"),
           Output("td-state","children", allow_duplicate=True),
           Output("setup-out-dot","className"),
+          # Setup button: update from this 2s poll so there is ZERO gap
+          Output("btn-setup","disabled", allow_duplicate=True),
+          Output("btn-setup","className", allow_duplicate=True),
+          Output("btn-setup","style", allow_duplicate=True),
+          Output("setup-btn-hint","children", allow_duplicate=True),
+          Output("setup-btn-hint","style", allow_duplicate=True),
           Input("btn-setup","n_clicks"),
           Input("setup-poll","n_intervals"),
           prevent_initial_call=True)
 def handle_setup(n_click, n_poll):
-    """Start setup ONLY on explicit button click. Poll for live updates."""
+    """Start setup ONLY on explicit button click. Poll for live updates.
+    Also outputs directly to btn-setup so the button state updates on
+    the 2s poll cadence (not waiting for the 10s auto_refresh)."""
+    _hint_base = {"fontSize":"10px","fontFamily":"var(--mono)","marginLeft":"12px","overflow":"hidden","textOverflow":"ellipsis","whiteSpace":"nowrap","maxWidth":"380px"}
+    _btn_base = {"fontWeight":"700","fontSize":"15px","padding":"12px 28px"}
     triggered = ctx.triggered_id
     # GUARD: only start setup on explicit button click with actual clicks
     if triggered == "btn-setup":
         if not n_click or n_click < 1:
             raise PreventUpdate
         if ST.get("setup_running"):
-            return "Setup already running...", False, no_update, no_update, "scr-dot active"
+            return ("Setup already running...", False, no_update, no_update, "scr-dot active",
+                    True, "btn", {**_btn_base, "opacity":"0.4"},
+                    "Setup is running…", {**_hint_base, "color":C["teal"]})
         lg = ST.setdefault("setup_log", [])
         if lg:
             lg.append("")
@@ -3121,7 +3345,9 @@ def handle_setup(n_click, n_poll):
         ST["setup_tasks"] = {}
         obo_h = get_headers()
         threading.Thread(target=_run_setup_bg, args=(obo_h,), daemon=True).start()
-        return "\n".join(lg), False, no_update, no_update, "scr-dot active"
+        return ("\n".join(lg), False, no_update, no_update, "scr-dot active",
+                True, "btn", {**_btn_base, "opacity":"0.4"},
+                "Setup is running…", {**_hint_base, "color":C["teal"]})
     # GUARD: if setup was never started, don't update anything
     if not ST.get("setup_running") and not ST.get("setup_tasks"):
         raise PreventUpdate
@@ -3155,7 +3381,23 @@ def handle_setup(n_click, n_poll):
     if not running and task_states:
         state_cards = _build_state_cards()
     dot_cls = "scr-dot active" if running else "scr-dot"
-    return "\n".join(log_lines), not running, step_rows, state_cards, dot_cls
+    # Setup button state: keep disabled during running AND after completion
+    # (catalog_exists / agents persist, so environment still exists)
+    _env_exists = bool(ST.get("agents")) or bool(ST.get("supervisors")) or bool(ST.get("catalog_exists"))
+    _btn_off = running or _env_exists
+    _btn_cls = "btn" if _btn_off else "btn primary"
+    _btn_sty = {**_btn_base, "opacity":"0.4" if _btn_off else "1"}
+    if running:
+        _hint = "Setup is running… check the output panel for live progress."
+        _hint_sty = {**_hint_base, "color":C["teal"]}
+    elif _env_exists:
+        _hint = "Environment exists — teardown first to re-run setup."
+        _hint_sty = {**_hint_base, "color":C["rose"]}
+    else:
+        _hint = f"Source: {SRC_DIR}"
+        _hint_sty = {**_hint_base, "color":C["muted"]}
+    return (_linkify_log_block(log_lines), not running, step_rows, state_cards, dot_cls,
+            _btn_off, _btn_cls, _btn_sty, _hint, _hint_sty)
 
 # ==== Page 3: Baseline ======================================================
 def submit_notebook_run(notebook_name):
@@ -3584,6 +3826,9 @@ def _run_bench_bg(label, obo_headers):
 
     def _test_one(idx, aid, agent_key, question, exp):
         """Run a single test against a domain agent. Thread-safe."""
+        if ST.get("bench_stop_requested"):
+            results[idx]["verdict"] = "SKIPPED"
+            return
         results[idx]["verdict"] = "RUNNING"
         sid = agents.get(agent_key)
         if not sid:
@@ -3614,6 +3859,7 @@ def _run_bench_bg(label, obo_headers):
         results[idx]["answer"] = all_text
 
     # Fire all 45 tests with up to 8 parallel workers
+    ST["bench_stop_requested"] = False
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {}
         for idx, (aid, agent_key, question, exp, desc, fix) in enumerate(ASSUMPTIONS):
@@ -3624,6 +3870,9 @@ def _run_bench_bg(label, obo_headers):
                 f.result()  # propagate exceptions
             except Exception as e:
                 log(f"Test {futures[f]} error: {e}")
+    stopped = ST.get("bench_stop_requested")
+    if stopped:
+        log("Benchmark stopped by user")
 
     elapsed = time.time() - t0
     total = sum(1 for r in results if r["verdict"] in ("EXACT","TOLERANT"))
@@ -3773,27 +4022,43 @@ def _build_bench_charts_inner(results):
           Output("bench-charts","children"),
           Output("btn-bench","disabled"),
           Output("bench-next-step","children"),
+          Output("btn-bench","children"),
+          Output("btn-bench","className"),
+          Output("btn-bench","style"),
           Input("btn-bench","n_clicks"),
           Input("bench-poll","n_intervals"),
           State("bench-label","data"),
           prevent_initial_call=True)
 def handle_bench(n_click, n_poll, label):
     triggered = ctx.triggered_id
+    _run_style = {"whiteSpace":"nowrap","padding":"10px 28px","marginLeft":"20px"}
+    _stop_style = {**_run_style, "opacity":"1"}
     if triggered == "btn-bench":
         if not n_click or n_click < 1:
             raise PreventUpdate
         if ST.get("bench_running"):
-            return _build_bench_grid(ST.get("bench_results")), False, no_update, True, no_update
+            # User clicked Stop — request cancellation
+            ST["bench_stop_requested"] = True
+            log("Benchmark: user requested stop")
+            return (no_update, no_update, no_update, True, no_update,
+                    "Stopping...", "btn", {**_run_style, "opacity":"0.5"})
         obo_h = get_headers()
         threading.Thread(target=_run_bench_bg, args=(label, obo_h), daemon=True).start()
-        return _build_bench_grid(ST.get("bench_results")), False, html.Div(), True, no_update
+        return (_build_bench_grid(ST.get("bench_results")), False, html.Div(), False,
+                no_update, "\u25a0 Stop Run", "btn rose", _stop_style)
     # Polling update
     results = ST.get("bench_results")
     if not results:
         raise PreventUpdate
     running = ST.get("bench_running", False)
     charts = _build_bench_charts(results) if not running else no_update
-    return _build_bench_grid(results), not running, charts, running, _build_bench_next_step() if not running else no_update
+    if running:
+        return (_build_bench_grid(results), False, charts, False,
+                no_update, "\u25a0 Stop Run", "btn rose", _stop_style)
+    # Done — restore original button
+    btn_label = "Re-run Baseline" if "Baseline" in ST.get("benchmarks", {}) else f"Run {_NT()}-Test Benchmark"
+    return (_build_bench_grid(results), True, charts, False,
+            _build_bench_next_step(), btn_label, "btn primary", _run_style)
 
 
 # ==== Page 4: Iterations ====================================================
@@ -3951,14 +4216,18 @@ def discover_agents_by_label(label, headers=None):
     """Discover SC agents matching a specific iteration label.
     Uses OBO for production correctness. Accepts pre-captured headers for thread safety."""
     h = headers or get_headers()
+    alias = _get_user_alias(h)
     spaces, _err = _list_all_genie_spaces(h)  # all pages (API returns 20 per page)
     if label in AGENT_VERSIONS:
-        # Same rule as discover_agents: exact version title (or Genie's duplicate suffix), newest wins
-        return dict(_group_agent_versions(spaces).get(label, {}))
+        # Strict: pass alias so only user-scoped titles match
+        return dict(_group_agent_versions(spaces, alias=alias).get(label, {}))
     found = {}
     for s in spaces:
         title = s.get("title", "")
         if "SC" not in title or label not in title:
+            continue
+        # Strict: only match user-scoped agents
+        if alias and alias != "unknown" and f"({alias})" not in title:
             continue
         sid = s["space_id"]
         if "Demand" in title: found["demand"] = sid
@@ -4092,21 +4361,51 @@ def _iter_setup_pct(log_lines, key=None, done=None):
     return max(2, min(99, round(100 * (reached + 1) / len(steps))))
 
 
+_LOG_URL_RX = re.compile(r"(https?://\S+)")
+
+def _linkify_log(line, text_color=None):
+    """Turn URLs in a log line into clickable links; return a list of Dash children."""
+    parts = _LOG_URL_RX.split(line)
+    if len(parts) == 1:
+        return line  # no URL — plain string
+    children = []
+    for i, seg in enumerate(parts):
+        if i % 2 == 1:  # matched URL
+            children.append(html.A(seg, href=seg, target="_blank",
+                                   style={"color": C["teal"], "textDecoration": "underline",
+                                          "wordBreak": "break-all"}))
+        elif seg:
+            children.append(seg)
+    return children
+
+def _linkify_log_block(lines):
+    """Turn a list of log lines into Dash children with clickable URLs (preserving newlines)."""
+    children = []
+    for i, ln in enumerate(lines):
+        if i > 0:
+            children.append("\n")
+        content = _linkify_log(ln) if "://" in ln else ln
+        if isinstance(content, list):
+            children.extend(content)  # flatten — Dash can't handle nested lists
+        else:
+            children.append(content)
+    return children or "Ready. Click a button above to run."
+
 def _setup_log_rows(log_lines):
     """Render setup log lines as step rows (dot + text; errors/warnings red, last line highlighted)."""
-    # Show each line as a step row with dot + color errors red
     children = []
     for i, line in enumerate(log_lines):
         is_last = (i == len(log_lines) - 1)
         is_err = "ERROR" in line.upper() or "WARNING" in line.upper() or "STOPPED BY USER" in line.upper()
         dot_color = C["rose"] if is_err else (C["indigo"] if is_last else C["teal"])
         text_color = C["rose"] if is_err else (C["indigo"] if is_last else C["ink"])
+        content = _linkify_log(line, text_color)
         children.append(html.Div([
             html.Span(className="scr-dot active" if is_last else "scr-dot",
                        style={"width":"6px","height":"6px","marginRight":"8px","display":"inline-block",
                               "borderRadius":"50%","background":dot_color}),
-            html.Span(line, style={"fontFamily":"var(--mono)","fontSize":"12px","color":text_color,
-                                   "fontWeight":"700" if is_err else "400"}),
+            html.Span(content, style={"fontFamily":"var(--mono)","fontSize":"12px","color":text_color,
+                                      "fontWeight":"700" if is_err else "400"}),
         ], style={"display":"flex","alignItems":"center","padding":"4px 0"}))
     return children
 
@@ -4225,11 +4524,13 @@ def _run_iter_setup_bg(tok, key, run_fn, obo_h, on_success):
     """Shared bg runner for Iter 1/2/3 setup. Never writes app state once stopped."""
     _log_step = _make_log_step(tok)
     try:
+        _alias = _get_user_alias(obo_h)
+        _cat = user_catalog(obo_h)
         result = run_fn(
-            host=HOST, headers=obo_h, catalog=CATALOG,
+            host=HOST, headers=obo_h, catalog=_cat,
             warehouse_id=WAREHOUSE_ID,
             discover_agents_fn=lambda label: discover_agents_by_label(label, headers=obo_h),
-            log_fn=_log_step,
+            log_fn=_log_step, user_alias=_alias,
         )
         if not _iter_is_current(tok):
             log(f"{key}: finished after user stop -- result discarded"); return
@@ -4343,13 +4644,29 @@ _ITER3_AGENT_FUNCTIONS = {
     "executive": ("reporting.get_critical_disruption_regions",         "P05 Executive Disruption Threshold"),
 }
 
-def _genie_agent_url(space_id):
-    """Absolute link to the agent on the Databricks workspace Genie page (not the app's own URL).
-    HOST can arrive without a scheme inside Databricks Apps, so normalise it."""
+def _ws_base():
+    """Normalised workspace base URL (always https)."""
     base = (HOST or "").rstrip("/")
     if base and not base.startswith(("http://", "https://")):
         base = "https://" + base
-    return f"{base}/genie/rooms/{space_id}"
+    return base
+
+def _genie_agent_url(space_id):
+    """Absolute link to the agent on the Databricks workspace Genie page (not the app's own URL)."""
+    return f"{_ws_base()}/genie/rooms/{space_id}"
+
+def _supervisor_url(sup):
+    """Absolute link to a supervisor's page in the Databricks workspace.
+    For supervisor-agents: /ml/supervisor-agents/{uuid}
+    For serving endpoints: /ml/endpoints/{endpoint_name}"""
+    name = sup.get("name", "") if sup else ""
+    if name.startswith("supervisor-agents/"):
+        uuid = name.split("/", 1)[1]
+        return f"{_ws_base()}/ml/supervisor-agents/{uuid}"
+    ep = sup.get("endpoint", "")
+    if ep:
+        return f"{_ws_base()}/ml/endpoints/{ep}"
+    return None
 
 
 def _build_manual_step_ui(spaces):
@@ -4692,6 +5009,40 @@ def _pretty_md(text):
     return "".join(out)
 
 
+def _annotate_gt_in_md(text, results):
+    """Inject <mark> tags around ground-truth values found in the supervisor answer.
+    Each matched value gets a tooltip with the test ID.  Only EXACT/TOLERANT results are annotated.
+    Protected regions (code fences, inline code, links) are skipped."""
+    if not text or not results:
+        return text
+    # Collect (literal_string, test_id) pairs, longest first to avoid partial matches
+    hits = []
+    for r in results:
+        if r.get("verdict") not in ("EXACT", "TOLERANT"):
+            continue
+        cl = r.get("closest")
+        if cl and len(str(cl)) >= 2:
+            hits.append((str(cl), r["id"]))
+    if not hits:
+        return text
+    hits.sort(key=lambda x: -len(x[0]))
+    # Build regex that skips code fences and inline code
+    escaped = [f"(?P<gt{i}>{re.escape(h[0])})" for i, h in enumerate(hits)]
+    tag_map = {f"gt{i}": tid for i, (_, tid) in enumerate(hits)}
+    prot = r"(?P<code>```[\s\S]*?```|`[^`]+`)"
+    pat = re.compile(prot + "|" + "|".join(escaped))
+    used = set()  # annotate each test ID only once
+    def _repl(m):
+        if m.group("code"):
+            return m.group(0)
+        for gn, tid in tag_map.items():
+            if m.group(gn) is not None and tid not in used:
+                used.add(tid)
+                return f'<mark title="{tid}">{m.group(gn)}</mark>'
+        return m.group(0)
+    return pat.sub(_repl, text)
+
+
 _TBL_SEP_RX = re.compile(r"\|\s*:?-+:?\s*\|")
 _TBL_SEP_RUN = re.compile(r"(?:\|\s*:?-+:?\s*)+\|")
 
@@ -4814,6 +5165,11 @@ def _fence_sql(md):
 def _step_body(kind, text):
     """Render one live step consistently: SQL as formatted code, tables as real tables, numbers polished."""
     t = re.sub(r"<!--.*?--\s*>", "", text or "", flags=re.S).strip()
+    # Strip agent-name prefix before table data (e.g. "demand-analysis ||col1|col2|")
+    if "|" in t:
+        idx = t.index("|")
+        if idx > 0 and "\n" not in t[:idx] and "|" not in t[:idx]:
+            t = t[idx:]
     base = {"fontSize": "12.5px", "color": C["ink"] if kind in ("call", "route") else C["muted"],
             "fontWeight": "600" if kind == "call" else "400", "flex": "1", "minWidth": "0"}
     m = re.match(r"(Running SQL|Executing SQL)\s*:\s*(.*)", t, re.S)
@@ -4860,6 +5216,22 @@ def _build_cmp_live(side):
     if not rows:
         rows = [html.Div("Waiting for the first step\u2026", style={"color": C["muted"], "fontSize": "12.5px"})]
     answer = live.get("answer") or ""
+    # Annotate matched ground-truth values after scoring is complete
+    cmp_results = ST.get(f"cmp_results_{side}")
+    display_answer = answer
+    if answer and cmp_results and live.get("status") == "done":
+        processed = _tableize_result(answer) if _is_md_table(answer) else answer
+        display_answer = _annotate_gt_in_md(_pretty_md(processed), cmp_results)
+    else:
+        display_answer = _pretty_md(_tableize_result(answer) if _is_md_table(answer) else answer) if answer else ""
+    # Rename generic "Explore in Databricks" link to the supervisor-specific label
+    if display_answer:
+        sups = ST.get("supervisors", [])
+        _idx = 0 if side == "a" else 1
+        _side_sup = sups[_idx] if len(sups) > _idx else None
+        _side_prof = _sup_profile(_side_sup) if _side_sup else None
+        if _side_prof and _side_prof["kind"] == "mcp":
+            display_answer = display_answer.replace("Explore in Databricks", "Explore Genie One")
     return html.Div([
         html.Div([
             html.Span(status, style={"fontWeight": "700", "color": col, "fontSize": "13px"}),
@@ -4872,11 +5244,18 @@ def _build_cmp_live(side):
         html.Div(html.Div(rows), style={**box, "height": "240px", "maxHeight": "240px", "boxSizing": "border-box", "flexShrink": "0"}),
         html.Div("Supervisor output", style={"fontSize": "11px", "fontWeight": "700", "letterSpacing": "0.05em",
                                              "textTransform": "uppercase", "color": C["muted"], "margin": "10px 0 4px"}),
-        html.Div(html.Div(dcc.Markdown(_pretty_md(_tableize_result(answer) if _is_md_table(answer) else answer), className="cmp-md", link_target="_blank") if answer else
+        html.Div(html.Div(dcc.Markdown(display_answer, className="cmp-md", link_target="_blank",
+                                       dangerously_allow_html=True) if answer else
                           html.Span("No output yet \u2014 the answer streams here as the supervisor writes it.",
                                     style={"color": C["muted"], "fontSize": "12.5px"}),
                           style={"fontSize": "13px"}),
                  style={**box, "height": "320px", "maxHeight": "320px", "boxSizing": "border-box", "flexShrink": "0", "background": C["surface"]}),
+        # Explore link below the output
+        html.A("Explore Genie One" if (_side_prof and _side_prof["kind"] == "mcp") else "Explore Supervisor Agent",
+               href=_supervisor_url(_side_sup) if _side_sup else None, target="_blank",
+               style={"fontSize":"13px","fontWeight":"600","color":C["indigo"],
+                      "textDecoration":"none","marginTop":"8px","display":"inline-block"})
+        if (_side_sup and _supervisor_url(_side_sup) and answer and live.get("status") == "done") else html.Div(),
     ], style={"marginBottom": "14px"})
 
 
@@ -4909,7 +5288,9 @@ def _cmp_status_line(names=("Supervisor A", "Supervisor B")):
     """Formatted live status for both supervisors: state chip, elapsed time, tool calls, output size and the
     latest step (2-line clamp, full text on hover)."""
     cards = []
-    for (side, lab), name in zip((("a", "A"), ("b", "B")), names):
+    for (side, _), name in zip((("a", "A"), ("b", "B")), names):
+        # Use first letter of the supervisor kind as badge, not generic A/B
+        lab = name[0].upper() if name else side.upper()
         live = ST.get(f"cmp_live_{side}") or {}
         status = live.get("status")
         st, ck = {"starting": ("Sending prompt", "indigo"), "calling": ("Calling tools", "indigo"),
@@ -5198,8 +5579,8 @@ def _build_stability_section():
         html.P(f"Deploy verdict: {verdict}", style={"fontWeight": "700", "color": C["ink"]}),
         html.Table([html.Thead(html.Tr([html.Th("Test")] + [html.Th(n) for n, _ in stages] + [html.Th("Change")])),
                     html.Tbody(rows or [html.Tr(html.Td("No verdict changes between stages.", colSpan=len(stages) + 2))])],
-                   className="tbl") ,
-    ])
+                   className="tbl"),
+    ], className="stage")
 
 
 # 3D-style palette: (front, top, side) -- mid-tone colours that read on both light and dark backgrounds
@@ -5526,13 +5907,30 @@ def handle_rob(n_click, _n, version):
 def _cmp_done_status(ra, rb):
     pa = sum(1 for r in ra if r["verdict"] in ("EXACT", "TOLERANT"))
     pb = sum(1 for r in rb if r["verdict"] in ("EXACT", "TOLERANT"))
-    return html.Span(f"Complete \u2014 A: {pa}/{len(ra) or _NT()}, B: {pb}/{len(rb) or _NT()}",
+    na = ST.get("cmp_name_a") or "Supervisor A"
+    nb = ST.get("cmp_name_b") or "Supervisor B"
+    return html.Span(f"Complete \u2014 {na}: {pa}/{len(ra) or _NT()}, {nb}: {pb}/{len(rb) or _NT()}",
                      style={"color": C["teal"], "fontSize": "13px", "fontWeight": "600"})
 
+
+def _any_sup_unknown():
+    """True when at least one supervisor still has unknown architecture (needs retry)."""
+    for s in (ST.get("supervisors") or []):
+        p = _sup_profile(s)
+        if p and p["kind"] == "unknown":
+            return True
+    return False
 
 def page_comparison():
     if not ST.get("app_ready"):
         return _build_loading_page("Loading Comparison")
+    # Auto-retry supervisor discovery if profiles are still unknown
+    if _any_sup_unknown() or not ST.get("supervisors"):
+        h = get_headers()
+        if "Authorization" in h:
+            fresh = discover_supervisors(headers=h)
+            if fresh:
+                ST["supervisors"] = fresh
     sups = ST.get("supervisors", [])
     # Keep the A/B sides of the last (possibly restored) comparison, so its results stay under the right supervisor
     _eps = ST.get("cmp_last_eps") or (None, None)
@@ -5567,6 +5965,12 @@ def page_comparison():
                                            "lineHeight":"1.5"}),
             html.Ul([html.Li(b, style={"fontSize":"12.5px","color":C["muted"],"fontFamily":"var(--mono)"})
                      for b in prof["bullets"]], style={"margin":"0","paddingLeft":"18px"}) if prof["bullets"] else html.Div(),
+            # Explore link — different label for each architecture
+            html.A("Explore Genie One" if prof["kind"] == "mcp" else "Explore Supervisor Agent",
+                   href=_supervisor_url(sup), target="_blank",
+                   style={"fontSize":"13px","fontWeight":"600","color":C["indigo"],
+                          "textDecoration":"none","marginTop":"10px","display":"inline-block"})
+            if _supervisor_url(sup) else html.Div(),
         ], className="stage", style={"flex":"1","minWidth":"0"})
 
     # Pre-rendered grids from previous run (if any)
@@ -5584,7 +5988,8 @@ def page_comparison():
         dcc.Store(id="cmp-a", data=sup_a["endpoint"] if sup_a else None),
         dcc.Store(id="cmp-b", data=sup_b["endpoint"] if sup_b else None),
         # Supervisor info cards
-        html.Div([sup_card("Supervisor A", sup_a, 0), sup_card("Supervisor B", sup_b, 1)],
+        html.Div([sup_card(_sup_title(sup_a, "Supervisor A"), sup_a, 0),
+                  sup_card(_sup_title(sup_b, "Supervisor B"), sup_b, 1)],
                  style={"display":"flex","gap":"20px","marginBottom":"16px"}),
         # The exact CFO prompt, formatted like the workshop HTML
         _build_prompt_box(),
@@ -5620,7 +6025,28 @@ def page_comparison():
                  if (results_a and results_b and not cmp_running
                      and all(r.get("verdict") != "RUNNING" for r in results_a + results_b)) else None),
         dcc.Interval(id="cmp-poll", interval=3000, disabled=not cmp_running),  # resume live updates after a page reload
+        # Auto-retry: re-discover supervisors until profiles resolve (then self-disables)
+        dcc.Interval(id="cmp-sup-poll", interval=5000, disabled=not _any_sup_unknown()),
     ])
+
+@callback(Output("page-refresh", "data", allow_duplicate=True),
+          Output("cmp-sup-poll", "disabled"),
+          Input("cmp-sup-poll", "n_intervals"),
+          prevent_initial_call=True)
+def _retry_sup_discovery(n):
+    """Auto-retry: re-discover supervisors while any profile is UNKNOWN."""
+    if not _any_sup_unknown():
+        return no_update, True  # all resolved — stop polling
+    h = get_headers()
+    if "Authorization" not in h:
+        raise PreventUpdate  # no token yet — wait for next interval
+    fresh = discover_supervisors(headers=h)
+    if fresh:
+        ST["supervisors"] = fresh
+    if _any_sup_unknown():
+        raise PreventUpdate  # still unknown — keep polling, don't re-render yet
+    log("cmp-sup-poll: supervisor profiles resolved — refreshing comparison page")
+    return -int(n or 1), True  # bump page-refresh to re-render, stop polling
 
 @_bg_guard("cmp_running")
 def _run_cmp_bg(ea, eb, obo_headers):
@@ -5699,7 +6125,9 @@ def _run_cmp_bg(ea, eb, obo_headers):
     ST["cmp_last_user"] = _get_user_from_headers(obo_headers)
     ST["cmp_last_eps"] = (ea, eb)
     ST["cmp_running"] = False
-    log(f"Comparison: A={pa}/{len(ra)} ({sa:.0f}s), B={pb}/{len(rb)} ({sb:.0f}s), total {elapsed:.0f}s")
+    na = ST.get("cmp_name_a") or "A"
+    nb = ST.get("cmp_name_b") or "B"
+    log(f"Comparison: {na}={pa}/{len(ra)} ({sa:.0f}s), {nb}={pb}/{len(rb)} ({sb:.0f}s), total {elapsed:.0f}s")
     try:
         _save_comparison_run(ea, eb, sa, sb, elapsed, ST["cmp_last_user"], obo_headers)
     except Exception as e:
@@ -5730,7 +6158,10 @@ def _build_cmp_charts(ra, rb, sup_a_name, sup_b_name):
     only_a = pa - both
     only_b = pb - both
     neither = len(ra) - pa - pb + both
-    fig_venn = _donut([("Both", both, "#14B8A6"), ("Only A", only_a, "#6366F1"), ("Only B", only_b, "#F59E0B"),
+    _short_a = sup_a_name.split("(")[0].strip()[:20] if len(sup_a_name) > 22 else sup_a_name
+    _short_b = sup_b_name.split("(")[0].strip()[:20] if len(sup_b_name) > 22 else sup_b_name
+    fig_venn = _donut([("Both", both, "#14B8A6"), (f"Only {_short_a}", only_a, "#6366F1"),
+                       (f"Only {_short_b}", only_b, "#F59E0B"),
                        ("Neither", neither, "#F43F5E")], f"{both}/{len(ra)}", "found by both", height=480)
     return html.Div([
         tiles,
@@ -5767,6 +6198,8 @@ def handle_cmp(n_click, n_poll, ea, eb):
         if not n_click:  # phantom trigger on re-render must never start a run
             raise PreventUpdate
         ST["cmp_running"] = True  # set BEFORE the thread starts so the nav lock is immediate
+        ST["cmp_name_a"] = sup_a_name
+        ST["cmp_name_b"] = sup_b_name
         obo_h = get_headers()
         threading.Thread(target=_run_cmp_bg, args=(ea, eb, obo_h), daemon=True).start()
         # Initial grids with all RUNNING
@@ -5856,8 +6289,9 @@ def page_agents():
 
 @callback(Output("disc-out","children"), Input("btn-disc","n_clicks"), prevent_initial_call=True)
 def disc_click(n):
-    ST["agents"] = discover_agents()
-    ST["supervisors"] = discover_supervisors()
+    h = get_headers()
+    ST["agents"] = discover_agents(headers=h)
+    ST["supervisors"] = discover_supervisors(headers=h)
     return f"Found {len(ST['agents'])} domain agents, {len(ST['supervisors'])} supervisors."
 
 @callback(Output("chat-target","value"), Input("qchat-target","data"), prevent_initial_call=True)
@@ -5967,8 +6401,8 @@ def _chat_bg(target, question, obo_headers):
 
 def _chat_error_text(resp):
     if resp.startswith("ERROR:TIME_LIMIT:"):
-        return ("The supervisor stopped at its ~290-second request window and did not send a continuation checkpoint. "
-                "Ask a narrower question, or send 'wrap up' to get what it gathered.")
+        return ("The supervisor exhausted all continuation rounds (~290s each) without finishing. "
+                "Try a narrower question, or send 'wrap up' to get a partial answer.")
     if resp.startswith("ERROR:NO_AUTH"):
         return "No user token available -- reload the page and try again."
     return "The agent returned an error: " + resp.split(":", 2)[-1][:300]
