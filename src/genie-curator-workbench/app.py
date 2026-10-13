@@ -1,7 +1,7 @@
 """Genie Curator Workbench — Databricks App (Dash)
 
 Replicates the Supply Chain Control Tower Curator Workbench notebook
-as an interactive web application with the Gap workshop dark theme.
+as an interactive web application with the Gap workshop light theme.
 """
 import os, time, json, re, threading
 from datetime import datetime
@@ -32,14 +32,14 @@ except Exception:
     def get_headers():
         return {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 
-# ── CSS Theme (from Gap_workshp_.html) ────────────────────────────────────
+# ── CSS Theme (from Gap_workshp_.html — light mode) ──────────────────────
 CSS_VARS = {
-    "bg": "#0D1324", "surface": "#151D33", "soft": "#1D2743",
-    "ink": "#E8ECF7", "muted": "#9AA5C0", "line": "#2A3555",
-    "glass": "rgba(13,19,36,.88)",
-    "rose": "#FF7C93", "rose_bg": "#3A1A27",
-    "teal": "#3DD9C4", "teal_bg": "#10322F",
-    "indigo": "#9AA1FF", "indigo_bg": "#222A5A",
+    "bg": "#F4F6FB", "surface": "#FFFFFF", "soft": "#EAEEF7",
+    "ink": "#15203A", "muted": "#556079", "line": "#D6DCEA",
+    "glass": "rgba(244,246,251,.88)",
+    "rose": "#C2273F", "rose_bg": "#FCE7EB",
+    "teal": "#087A70", "teal_bg": "#D9F3EE",
+    "indigo": "#4338CA", "indigo_bg": "#E6E7FB",
 }
 FONTS = "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Instrument+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500&display=swap"
 

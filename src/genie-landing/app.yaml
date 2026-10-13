@@ -1,0 +1,8 @@
+command:
+  - python
+  - app.py
+env:
+  - name: TARGET_APP_NAME
+    value: "genie-curator-workbench"
+  - name: TARGET_APP_URL
+    value: "https://genie-curator-workbench-1866518241053589.9.azure.databricksapps.com"

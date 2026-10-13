@@ -704,19 +704,11 @@ try:
     if _list_mcp.status_code == 200:
         for _s in _list_mcp.json().get("supervisor_agents", []):
             _dn = _s.get("display_name", "")
-            # Match exact name OR legacy name without alias suffix
+            # Match exact name only — never touch another user's supervisor
             if _dn == MCP_SUP_NAME:
                 mcp_sup_name = _s["name"]
                 mcp_ep = _s.get("endpoint_name", "")
                 print(f"  Already exists: {mcp_sup_name} — reusing")
-                break
-            elif "MCP Supervisor" in _dn and "Supply Chain" in _dn and _dn != MCP_SUP_NAME:
-                # Legacy name without alias — reuse and rename
-                mcp_sup_name = _s["name"]
-                mcp_ep = _s.get("endpoint_name", "")
-                requests.patch(f"{host}/api/2.1/{mcp_sup_name}?update_mask=display_name",
-                               headers=headers, json={"display_name": MCP_SUP_NAME})
-                print(f"  Renamed '{_dn}' → '{MCP_SUP_NAME}' — reusing {mcp_sup_name}")
                 break
 except Exception as e:
     print(f"  Warning: could not list supervisors: {e}")

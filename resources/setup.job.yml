@@ -1,0 +1,111 @@
+# Curator Workbench: Full Setup — serverless compute
+# Mirrors live job ID 98136556715691
+# Creates catalog, generates data (parallel), builds views, sets up agents, grants permissions
+
+resources:
+  jobs:
+    curator_workbench_setup:
+      name: "[${bundle.target}] Curator Workbench: Full Setup"
+      description: |
+        End-to-end provisioning of the Supply Chain Control Tower demo.
+        Creates the Unity Catalog, generates all domain data in parallel,
+        builds reporting views, sets up Genie Agents + Supervisor, and
+        grants access to all workspace users.
+      tags:
+        project: gap_supply_chain_demo
+        purpose: setup
+
+      tasks:
+        - task_key: create_catalog
+          notebook_task:
+            notebook_path: ../src/01_create_catalog_schemas.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+          environment_key: Default
+
+        - task_key: gen_demand
+          depends_on:
+            - task_key: create_catalog
+          notebook_task:
+            notebook_path: ../src/02_generate_demand_data.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+          environment_key: Default
+
+        - task_key: gen_inventory
+          depends_on:
+            - task_key: create_catalog
+          notebook_task:
+            notebook_path: ../src/03_generate_inventory_data.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+          environment_key: Default
+
+        - task_key: gen_logistics
+          depends_on:
+            - task_key: create_catalog
+          notebook_task:
+            notebook_path: ../src/04_generate_logistics_data.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+          environment_key: Default
+
+        - task_key: gen_supplier
+          depends_on:
+            - task_key: create_catalog
+          notebook_task:
+            notebook_path: ../src/05_generate_supplier_data.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+          environment_key: Default
+
+        - task_key: reporting_views
+          depends_on:
+            - task_key: gen_demand
+            - task_key: gen_inventory
+            - task_key: gen_logistics
+            - task_key: gen_supplier
+          notebook_task:
+            notebook_path: ../src/06_create_reporting_views.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+          environment_key: Default
+
+        - task_key: add_comments
+          depends_on:
+            - task_key: reporting_views
+          notebook_task:
+            notebook_path: ../src/07_add_all_comments.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+          environment_key: Default
+
+        - task_key: setup_agents
+          depends_on:
+            - task_key: add_comments
+          notebook_task:
+            notebook_path: ../src/08_setup_genie_supervisor.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              warehouse_id: ${var.warehouse_id}
+              agent_label: "Iteration 3"
+          environment_key: Default
+
+        - task_key: share_with_all_users
+          depends_on:
+            - task_key: setup_agents
+          notebook_task:
+            notebook_path: ../src/notebooks/grant_genie_permissions.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+          environment_key: Default
+
+      queue:
+        enabled: true
+
+      max_concurrent_runs: 1
+
+      environments:
+        - environment_key: Default
+          spec:
+            client: "2"

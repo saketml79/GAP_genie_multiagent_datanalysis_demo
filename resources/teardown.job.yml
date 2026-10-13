@@ -1,0 +1,29 @@
+# Curator Workbench: Teardown — serverless compute
+# Mirrors live job ID 154776446737504
+
+resources:
+  jobs:
+    curator_workbench_teardown:
+      name: "[${bundle.target}] Curator Workbench: Teardown"
+      description: |
+        Removes all Supply Chain Control Tower demo artifacts:
+        drops the Unity Catalog, deletes Genie Agents and Supervisor
+        endpoint. Idempotent — safe to run even if partially torn down.
+      tags:
+        project: gap_supply_chain_demo
+        purpose: teardown
+
+      tasks:
+        - task_key: teardown
+          notebook_task:
+            notebook_path: ../src/09_teardown.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+          environment_key: Default
+
+      max_concurrent_runs: 1
+
+      environments:
+        - environment_key: Default
+          spec:
+            client: "2"

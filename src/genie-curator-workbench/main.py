@@ -1,7 +1,7 @@
 """Genie Curator Workbench v2 — Supply Chain Control Tower.
 
 Benchmark, iterate, and compare Genie Agent configurations
-using the Gap workshop dark-theme design system.
+using the Gap workshop light-theme design system.
 """
 import os, time, json, re, threading, uuid
 from datetime import datetime
@@ -129,12 +129,12 @@ def get_headers():
 # ---- Design tokens (from Gap_workshp_.html) --------------------------------
 # HEX: raw colors for Plotly charts (which can't use CSS vars)
 HEX = dict(
-    bg="#0D1324", surface="#151D33", soft="#1D2743",
-    ink="#E8ECF7", muted="#9AA5C0", line="#2A3555",
-    glass="rgba(13,19,36,.88)",
-    rose="#FF7C93", rose_bg="#3A1A27",
-    teal="#3DD9C4", teal_bg="#10322F",
-    indigo="#9AA1FF", indigo_bg="#222A5A",
+    bg="#F4F6FB", surface="#FFFFFF", soft="#EAEEF7",
+    ink="#15203A", muted="#556079", line="#D6DCEA",
+    glass="rgba(244,246,251,.88)",
+    rose="#C2273F", rose_bg="#FCE7EB",
+    teal="#087A70", teal_bg="#D9F3EE",
+    indigo="#4338CA", indigo_bg="#E6E7FB",
 )
 # C: CSS variable refs — adapt to light/dark theme automatically
 C = dict(
@@ -205,9 +205,9 @@ ASSUMPTIONS = [
     ("P05","executive","How many suppliers exceeded the Executive Disruption Threshold?",3,"risk<55,ltv>8,penalty>80K","Iter3"),
 ]
 GROUPS = {
-    "A":("Logistics","#9AA1FF"), "B":("Demand","#3DD9C4"), "C":("Inventory","#FF7C93"),
-    "D":("Supplier","#F59E0B"), "E":("Cross-Domain","#8B5CF6"), "F":("Indirect","#6366F1"),
-    "G":("Fiscal","#10B981"), "H":("Hard","#FF7C93"), "P":("Policy","#3DD9C4"),
+    "A":("Logistics","#4338CA"), "B":("Demand","#087A70"), "C":("Inventory","#C2273F"),
+    "D":("Supplier","#D97706"), "E":("Cross-Domain","#7C3AED"), "F":("Indirect","#4F46E5"),
+    "G":("Fiscal","#059669"), "H":("Hard","#C2273F"), "P":("Policy","#087A70"),
 }
 MAIN_PROMPT = (
     "We need a complete supply chain health check for our West region in August 2026. "
@@ -1419,7 +1419,7 @@ code{{font-family:var(--mono);font-size:.86em}}
 
 /* --- metric tiles (from HTML .tile) --- */
 .tile{{border:1px solid var(--line);border-radius:14px;padding:10px 14px;display:flex;flex-direction:column;gap:2px;min-width:100px}}
-.tile b{{font-family:var(--display);font-size:clamp(18px,2vw,26px);letter-spacing:-.03em;line-height:1.1;font-variant-numeric:tabular-nums;color:var(--ink)}}
+.tile b{{font-family:var(--display);font-size:clamp(16px,1.8vw,22px);letter-spacing:-.03em;line-height:1.1;font-variant-numeric:tabular-nums;color:var(--ink)}}
 .tile code{{color:var(--muted);font-size:12px;white-space:normal;overflow-wrap:anywhere;max-width:320px}}
 .tile.teal{{border-color:var(--teal);background:var(--teal-bg)}}
 .tile.teal b{{color:var(--teal)}}
@@ -1596,7 +1596,7 @@ code{{font-family:var(--mono);font-size:.86em}}
 """
 
 app.index_string = (
-    '<!DOCTYPE html>\n<html data-theme="dark">\n<head>\n'
+    '<!DOCTYPE html>\n<html data-theme="light">\n<head>\n'
     '    {%metas%}\n    <title>{%title%}</title>\n'
     '    {%favicon%}\n    {%css%}\n'
     '    <style>' + _CSS + '</style>\n'
@@ -2934,10 +2934,10 @@ def page_setup():
                     ]),
                     html.Div(id="setup-btn-wrap", children=[
                         html.Button("Run Full Setup", id="btn-setup",
-                                    className="btn primary",
-                                    disabled=False,
-                                    style={"fontWeight":"700","fontSize":"15px","padding":"12px 28px"}),
-                        html.Span(f"Source: {SRC_DIR}", id="setup-btn-hint",
+                                    className="btn",
+                                    disabled=True,
+                                    style={"fontWeight":"700","fontSize":"15px","padding":"12px 28px","opacity":"0.4"}),
+                        html.Span("Checking environment…", id="setup-btn-hint",
                                   style={"color":C["muted"],
                                          "fontSize":"10px","fontFamily":"var(--mono)","marginLeft":"12px","overflow":"hidden","textOverflow":"ellipsis","whiteSpace":"nowrap","maxWidth":"280px"}),
                     ], style={"display":"flex","alignItems":"center","marginTop":"20px"}),
@@ -5679,7 +5679,7 @@ def _build_stability_section():
         return html.Div([head, html.P("Needs at least two completed benchmark stages in this app session "
                                       "(Baseline and an iteration) to compare verdict flips and value stability.",
                                       style={"color": C["muted"], "fontSize": "13px"})],
-                        className="stage", style={"marginTop": "4px"})
+                        className="stage", style={"marginTop": "32px"})
     ok = lambda v: v in ("EXACT", "TOLERANT")
     by = [{r["id"]: r for r in res} for _, res in stages]
     ids = [r["id"] for r in stages[0][1]]
@@ -5713,7 +5713,7 @@ def _build_stability_section():
         html.Table([html.Thead(html.Tr([html.Th("Test")] + [html.Th(n) for n, _ in stages] + [html.Th("Change")])),
                     html.Tbody(rows or [html.Tr(html.Td("No verdict changes between stages.", colSpan=len(stages) + 2))])],
                    className="tbl"),
-    ], className="stage", style={"marginTop": "4px"})
+    ], className="stage", style={"marginTop": "32px"})
 
 
 # 3D-style palette: (front, top, side) -- mid-tone colours that read on both light and dark backgrounds
