@@ -137,8 +137,8 @@ Additional Iter 3 features: ai_forecast capability added to all 5 domain agents.
 
 | Name                       | Type             | Description                              |
 |----------------------------|------------------|------------------------------------------|
-| Supply Chain Control Tower | Supervisor Agent | Routes CFO questions to 5 domain agents  |
-| Supply Chain MCP Supervisor| MCP Supervisor   | Genie One MCP — alternative architecture |
+| Supply Chain Control Tower ({alias}) | Supervisor Agent | Routes CFO questions to 5 domain agents + 5 policy SQL functions |
+| Supply Chain MCP Supervisor ({alias}) | MCP Supervisor   | Genie One MCP — alternative single-tool architecture |
 
 ## Token Economics (from README measurement)
 

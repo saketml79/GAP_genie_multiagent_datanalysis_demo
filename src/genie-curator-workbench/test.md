@@ -113,6 +113,9 @@ Note: Baseline scores are non-deterministic (~). After Iter 2+, scores are deter
 1. Only Iter 1 button enabled when baseline exists (Iter 2, 3 disabled).
 2. After Iter 1 completes → Iter 2 enables, Iter 1 disables.
 3. While an iteration runs → all iteration buttons disabled.
+4. After all 3 complete → Iter 3 shows "Re-run Iteration 3" (enabled), Iter 1/2 show "Re-run" (disabled).
+5. Badges update to "Completed" within 2 seconds of iteration finishing (poll_iter_bench bumps page-refresh).
+6. Supervisor refresh job passes the CURRENT user's alias (from OBO headers), not a stale ST value.
 
 ### Agents (Chat)
 1. Select agent → send question → response appears.
@@ -153,9 +156,15 @@ Note: Baseline scores are non-deterministic (~). After Iter 2+, scores are deter
 ### Background Threads (OBO captured BEFORE thread start)
 - [ ] _run_setup_bg receives obo_headers as parameter (captured in callback)
 - [ ] _run_bench_bg receives obo_headers as parameter
-- [ ] _run_iter1_full_bg receives obo_headers as parameter
+- [ ] _run_iter_setup_bg receives obo_h as parameter (captured in _iter_button_click)
 - [ ] _run_iter_bench_bg receives obo_headers as parameter
 - [ ] _run_cmp_bg receives obo_headers as parameter
+- [ ] _run_teardown_bg receives obo_headers as parameter (captured in handle_teardown)
+- [ ] _run_supervisor_refresh_job receives obo_headers parameter (from success callbacks)
+- [ ] _it1/_it2/_it3_success callbacks receive obo_h from bg thread, forward to supervisor job
+- [ ] NEVER read ST['user_alias'] or ST['user_catalog'] for job parameters (multi-user safety)
+- [ ] _iter_stop_now cancels supervisor job via ST['_iter_sup_rid'] (stored on trigger, popped on stop)
+- [ ] _run_supervisor_refresh_job wraps post-trigger _log_step in try/except InterruptedError → cancel
 
 ### Data Integrity
 - [ ] Progression chart shows ONLY actual benchmark results (no hardcoded expected scores)

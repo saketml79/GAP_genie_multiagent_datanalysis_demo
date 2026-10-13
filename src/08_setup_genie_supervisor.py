@@ -549,7 +549,7 @@ if not supervisor_name:
 
 # COMMAND ----------
 
-# DBTITLE 1,Add Sub-Agent Tools (5 domain agents, no evaluator)
+# DBTITLE 1,Add Sub-Agent Tools (5 domain agents, no evaluator — idempotent)
 # ====================================================================
 # ADD SUB-AGENT TOOLS
 # ====================================================================
@@ -578,6 +578,15 @@ tool_configs = {
     # It is called externally by the Python scorer in 00_run_all.py.
     # This prevents the supervisor from accessing ground truth values.
 }
+
+# Remove existing genie_space tools first to avoid duplicates on re-run
+_existing_tools = requests.get(f"{host}/api/2.1/{supervisor_name}/tools", headers=headers, timeout=15)
+if _existing_tools.status_code == 200:
+    for _t in _existing_tools.json().get("tools", []):
+        if _t.get("tool_type") == "genie_space":
+            _tid = _t.get("tool_id", "")
+            requests.delete(f"{host}/api/2.1/{supervisor_name}/tools/{_tid}", headers=headers)
+            print(f"  Removed old tool: {_tid}")
 
 for tool_id, config in tool_configs.items():
     genie_space_id = space_ids.get(config["space_key"])
@@ -653,7 +662,7 @@ for i, example in enumerate(quality_examples):
 # ====================================================================
 # CREATE MCP SUPERVISOR — Genie One MCP tool
 # ====================================================================
-MCP_SUP_NAME = "Supply Chain MCP Supervisor"
+MCP_SUP_NAME = f"Supply Chain MCP Supervisor ({USER_ALIAS})" if USER_ALIAS else "Supply Chain MCP Supervisor"
 
 MCP_DESCRIPTION = (
     "Supply Chain Control Tower powered by Genie One MCP. "
@@ -661,7 +670,9 @@ MCP_DESCRIPTION = (
     "to genie-one-mcp in a single call. Never fabricates data."
 )
 
-MCP_INSTRUCTIONS = """You are a Supply Chain analyst. You have ONE tool: genie-one-mcp (Genie One).
+MCP_INSTRUCTIONS = f"""USER CONTEXT: All supply chain data lives in catalog `{CATALOG}`. Current user alias: {USER_ALIAS}. Only query tables in this catalog.
+
+You are a Supply Chain analyst. You have ONE tool: genie-one-mcp (Genie One).
 
 CRITICAL: You have a 15-step budget. Each Genie One call uses 3 steps.
 That gives you only 5 calls total. USE THEM WISELY.
@@ -692,10 +703,20 @@ try:
     _list_mcp = requests.get(f"{host}/api/2.1/supervisor-agents", headers=headers, timeout=15)
     if _list_mcp.status_code == 200:
         for _s in _list_mcp.json().get("supervisor_agents", []):
-            if _s.get("display_name") == MCP_SUP_NAME:
+            _dn = _s.get("display_name", "")
+            # Match exact name OR legacy name without alias suffix
+            if _dn == MCP_SUP_NAME:
                 mcp_sup_name = _s["name"]
                 mcp_ep = _s.get("endpoint_name", "")
                 print(f"  Already exists: {mcp_sup_name} — reusing")
+                break
+            elif "MCP Supervisor" in _dn and "Supply Chain" in _dn and _dn != MCP_SUP_NAME:
+                # Legacy name without alias — reuse and rename
+                mcp_sup_name = _s["name"]
+                mcp_ep = _s.get("endpoint_name", "")
+                requests.patch(f"{host}/api/2.1/{mcp_sup_name}?update_mask=display_name",
+                               headers=headers, json={"display_name": MCP_SUP_NAME})
+                print(f"  Renamed '{_dn}' → '{MCP_SUP_NAME}' — reusing {mcp_sup_name}")
                 break
 except Exception as e:
     print(f"  Warning: could not list supervisors: {e}")
@@ -732,6 +753,14 @@ if mcp_sup_name:
         json={"description": MCP_DESCRIPTION, "instructions": MCP_INSTRUCTIONS},
     )
     print(f"  Instructions: {'applied' if patch_r.status_code == 200 else 'FAILED ' + patch_r.text[:200]}")
+
+    # Remove existing tools first to avoid duplicates on re-run
+    _tools_r = requests.get(f"{host}/api/2.1/{mcp_sup_name}/tools", headers=headers, timeout=15)
+    if _tools_r.status_code == 200:
+        for _t in _tools_r.json().get("tools", []):
+            _tid = _t.get("tool_id", "")
+            requests.delete(f"{host}/api/2.1/{mcp_sup_name}/tools/{_tid}", headers=headers)
+            print(f"  Removed old tool: {_tid}")
 
     # Add genie_one_mcp tool
     add_tool = requests.post(

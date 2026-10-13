@@ -18,7 +18,7 @@
 # MAGIC
 # MAGIC ### Key insight: Non-determinism → Determinism
 # MAGIC
-# MAGIC At baseline, agent answers are **non-deterministic** — the same question may produce different SQL on different runs. The agent guesses table and column mappings from names, picks thresholds from general knowledge, and may change its answer if the question is rephrased. In the recorded baseline run, **28 of 45 tests pass**; before the semantic layer is added, results can still drift across runs.
+# MAGIC At baseline, agent answers are **non-deterministic** — the same question may produce different SQL on different runs. The agent guesses table and column mappings from names, picks thresholds from general knowledge, and may change its answer if the question is rephrased. In the recorded baseline run, **~28 of 45 tests pass**; before the semantic layer is added, results can still drift across runs.
 # MAGIC
 # MAGIC Each iteration adds UC Semantic features that make more answers **deterministic**: the agent follows governed metadata (column comments, metric views, SQL functions) rather than guessing. By Iteration 3, all 45 tests pass consistently because every answer is grounded in a UC-governed asset.
 # MAGIC

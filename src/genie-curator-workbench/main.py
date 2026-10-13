@@ -703,10 +703,12 @@ def discover_supervisors(headers=None):
         # Only update status when we got a real response (not a missing-auth 403)
         if r.status_code != 403:
             ST["sup_api_status"] = r.status_code
-        elif not ST.get("sup_api_status") or ST.get("sup_api_status") == 200:
-            # First 403 or regression from 200 — store but log loudly
+        elif not ST.get("_sup_403_logged"):
+            # Log once per app session — this 403 is expected (OBO token lacks
+            # supervisor-agents scope). Serving-endpoints fallback always works.
             ST["sup_api_status"] = r.status_code
-            log(f"discover_supervisors: supervisor-agents API returned 403 (token may lack permission)")
+            ST["_sup_403_logged"] = True
+            log(f"discover_supervisors: supervisor-agents API returned 403 (expected — using serving-endpoints fallback)")
         if r.status_code == 200:
             all_sups = r.json().get("supervisor_agents", [])
             log(f"discover_supervisors: {len(all_sups)} supervisor agents from API")
@@ -720,13 +722,28 @@ def discover_supervisors(headers=None):
                 sc_sups = user_sups  # empty list if none match — no silent fallback
             for s in sc_sups:
                 dn = s.get("display_name", "")
+                tools = _fetch_supervisor_tools(h, s["name"])
+                # Fallback: if direct tools endpoint failed (403), try via serving endpoint tile_id
+                if not tools and s.get("endpoint_name"):
+                    try:
+                        _ep_r = requests.get(f"{HOST}/api/2.0/serving-endpoints/{s['endpoint_name']}",
+                                             headers=h, timeout=15)
+                        if _ep_r.status_code == 200:
+                            _tid = (_ep_r.json().get("tile_endpoint_metadata") or {}).get("tile_id")
+                            if _tid:
+                                _info = _resolve_supervisor_from_tile(h, _tid)
+                                tools = _info.get("tools", []) if _info else []
+                                if tools:
+                                    log(f"discover_supervisors: resolved {len(tools)} tools for {dn} via tile fallback")
+                    except Exception:
+                        pass
                 found.append(dict(name=s["name"], display_name=dn,
                                   endpoint=s.get("endpoint_name",""),
                                   desc=s.get("description","")[:80],
                                   desc_full=s.get("description",""),
                                   create_time=s.get("create_time",""),
-                                  tools=_fetch_supervisor_tools(h, s["name"])))
-        else:
+                                  tools=tools))
+        elif r.status_code != 403:
             log(f"Supervisor API: HTTP {r.status_code} (falling back to serving endpoints)")
     except Exception as e:
         ST["sup_api_status"] = f"error: {e}"
@@ -933,16 +950,18 @@ def _cancel_job_run(run_id, headers=None):
         pass
 
 
-def _run_supervisor_refresh_job(iter_key, tok, _log_step):
+def _run_supervisor_refresh_job(iter_key, tok, _log_step, obo_headers=None):
     """Trigger this iteration's Supervisor job (run_as = user) and wait for it.
     Non-fatal: any failure is logged loudly and the iteration continues (domain-agent
-    benchmark does not depend on the Supervisor). User Stop cancels the job run."""
+    benchmark does not depend on the Supervisor). User Stop cancels the job run.
+    obo_headers: per-user OBO headers captured at button-click time (Flask context).
+    MUST be passed — ST['user_alias'] is global and can contain another user's alias."""
     job_id = ITER_SUPERVISOR_JOB_IDS.get(iter_key, "")
     if not job_id:
         _log_step(f"\u26a0 Supervisor NOT updated: no job ID configured for {iter_key} (app.yaml)")
         return None
-    _alias = ST.get("user_alias") or ""
-    _cat = ST.get("user_catalog") or CATALOG
+    _alias = _get_user_alias(obo_headers) if obo_headers else (ST.get("user_alias") or "")
+    _cat = user_catalog(obo_headers) if obo_headers else (ST.get("user_catalog") or CATALOG)
     _iter_num = iter_key.replace("it", "")
     _params = ["--mode", "supervisor-job",
                "--iteration", _iter_num,
@@ -953,8 +972,16 @@ def _run_supervisor_refresh_job(iter_key, tok, _log_step):
     if err or not rid:
         _log_step(f"\u26a0 Supervisor NOT updated: could not trigger job {job_id}: {err or 'unknown error'}")
         return None
-    _log_step(f"  Supervisor job run_id={rid}  \u2192 {HOST}/#job/{job_id}/run/{rid}")
+    # Store run ID so _iter_stop_now can cancel it even if the bg thread
+    # hasn't entered the polling loop yet (edge case: Stop between trigger and poll).
+    ST["_iter_sup_rid"] = rid
     h = get_sp_headers()
+    try:
+        _log_step(f"  Supervisor job run_id={rid}  \u2192 {HOST}/#job/{job_id}/run/{rid}")
+    except InterruptedError:
+        _cancel_job_run(rid, h)
+        log(f"{iter_key}: supervisor job run {rid} cancelled (stop before poll)")
+        raise
     t0 = time.time()
     while time.time() - t0 < 1800:
         if not _iter_is_current(tok):
@@ -974,12 +1001,15 @@ def _run_supervisor_refresh_job(iter_key, tok, _log_step):
             if life in ("TERMINATED", "SKIPPED", "INTERNAL_ERROR"):
                 if result == "SUCCESS":
                     _log_step("  Supervisor updated \u2713")
+                    ST.pop("_iter_sup_rid", None)
                     return rid
                 detail = _fetch_run_error(rid, h) or state.get("state_message", "") or result or life
                 _log_step(f"\u26a0 Supervisor NOT updated: job run {rid} failed: {detail}")
+                ST.pop("_iter_sup_rid", None)
                 return None
         time.sleep(5)
     _cancel_job_run(rid, h)
+    ST.pop("_iter_sup_rid", None)
     _log_step(f"\u26a0 Supervisor NOT updated: job run {rid} timed out (30 min) and was cancelled")
     return None
 
@@ -1388,8 +1418,8 @@ code{{font-family:var(--mono);font-size:.86em}}
 .card{{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px;margin-bottom:20px}}
 
 /* --- metric tiles (from HTML .tile) --- */
-.tile{{border:1px solid var(--line);border-radius:14px;padding:14px 20px;display:flex;flex-direction:column;gap:2px;min-width:140px}}
-.tile b{{font-family:var(--display);font-size:clamp(26px,3.5vw,38px);letter-spacing:-.03em;line-height:1.1;font-variant-numeric:tabular-nums;color:var(--ink)}}
+.tile{{border:1px solid var(--line);border-radius:14px;padding:10px 14px;display:flex;flex-direction:column;gap:2px;min-width:100px}}
+.tile b{{font-family:var(--display);font-size:clamp(18px,2vw,26px);letter-spacing:-.03em;line-height:1.1;font-variant-numeric:tabular-nums;color:var(--ink)}}
 .tile code{{color:var(--muted);font-size:12px;white-space:normal;overflow-wrap:anywhere;max-width:320px}}
 .tile.teal{{border-color:var(--teal);background:var(--teal-bg)}}
 .tile.teal b{{color:var(--teal)}}
@@ -1483,7 +1513,7 @@ code{{font-family:var(--mono);font-size:.86em}}
 .VirtualizedSelectFocusedOption{{background:var(--soft) !important}}
 
 /* --- grid helpers --- */
-.tiles-row{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px}}
+.tiles-row{{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:24px}}
 .btn-row{{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;margin-bottom:20px}}
 .two-col{{display:grid;grid-template-columns:1fr 1fr;gap:24px}}
 @media(max-width:800px){{.two-col{{grid-template-columns:1fr}}}}
@@ -1532,6 +1562,7 @@ code{{font-family:var(--mono);font-size:.86em}}
 .chat-bubble.agent{{align-self:flex-start;background:var(--soft);color:var(--ink);border-bottom-left-radius:4px}}
 .chat-bubble pre{{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;margin:8px 0;font-family:var(--mono);font-size:12.5px;overflow-x:auto;white-space:pre-wrap}}
 .chat-bubble table{{width:100%;border-collapse:collapse;margin:8px 0;font-size:13px}}
+.stage.rob-chart{{margin-bottom:0}}
 .rob-chart .js-plotly-plot .xtick text,.rob-chart .js-plotly-plot .ytick text,.rob-chart .js-plotly-plot .legendtext,.rob-chart .js-plotly-plot .ytitle,.rob-chart .js-plotly-plot .xtitle{{fill:var(--muted)!important}}
 .rob-chart .js-plotly-plot .annotation-text{{fill:var(--ink)!important}}
 .rob-chart .js-plotly-plot .scatterlayer .textpoint text{{fill:var(--ink)!important}}
@@ -2437,13 +2468,23 @@ def _latest_stage_score():
 
 
 def _agent_count_summary(agents=None):
-    """(total, detail) across every version, e.g. (20, "Baseline 5 \u00b7 Iteration 1 5 \u00b7 ...").
+    """(total, detail_children) across every version.
+    Returns (int, list[Span]) so the card can render each version as a styled chip.
     Falls back to the single discovered set when no versioned agents are known."""
     versions = ST.get("agent_versions") or {}
     if versions:
-        return sum(len(a) for a in versions.values()), " \u00b7 ".join(f"{v} {len(a)}" for v, a in versions.items())
+        total = sum(len(a) for a in versions.values())
+        parts = []
+        for v, a in versions.items():
+            if parts:
+                parts.append(html.Span(" \u00b7 ", style={"color": C["muted"], "margin": "0 2px"}))
+            parts.append(html.Span([
+                html.Span(v, style={"fontWeight": "600"}),
+                html.Span(f" {len(a)}", style={"fontWeight": "400"}),
+            ]))
+        return total, html.Span(parts, style={"fontSize": "12px", "color": C["muted"], "lineHeight": "1.6"})
     agents = ST.get("agents", {}) if agents is None else agents
-    return len(agents), ", ".join(n.title() for n in agents)
+    return len(agents), html.Span(", ".join(n.title() for n in agents), style={"fontSize": "12px", "color": C["muted"]})
 
 
 def _agent_version_options():
@@ -2630,6 +2671,19 @@ def _overview_hero():
     ], style={"marginBottom": "26px"})
 
 
+def _overview_rob_tiles():
+    """Two overview tiles: avg reliability & dependability (always shown; '--' when not run)."""
+    sc = _rob_scores(ST.get("rob_results") or []) if ST.get("rob_results") else []
+    if not sc:
+        return [Tile("--", "RELIABILITY"), Tile("--", "DEPENDABILITY")]
+    avg_rel = sum(s["reliability"] for s in sc) / len(sc)
+    avg_dep = sum(s["dependability"] for s in sc) / len(sc)
+    return [
+        Tile(f"{avg_rel:.0f}%", "RELIABILITY", "teal" if avg_rel >= 80 else ("rose" if avg_rel < 50 else None)),
+        Tile(f"{avg_dep:.0f}%", "DEPENDABILITY", "indigo" if avg_dep >= 80 else ("rose" if avg_dep < 50 else None)),
+    ]
+
+
 def page_overview():
     if not ST.get("app_ready"):
         return _build_loading_page("Loading Overview")
@@ -2664,7 +2718,7 @@ def page_overview():
             Tile(ns, "SUPERVISORS", "indigo" if ns>0 else ("rose" if ns==0 else None)),
             Tile(_latest_stage_name(), "LATEST STAGE", "indigo" if ST.get("benchmarks") else None),
             Tile(_latest_stage_score(), "LATEST SCORE", "teal" if ST.get("benchmarks") else None),
-        ], className="tiles-row"),
+        ] + _overview_rob_tiles(), className="tiles-row"),
         # Stage progress + next-action recommendation
         _build_stage_progress(),
         # What the Control Tower is for: architecture, how accuracy is earned, progression
@@ -2955,8 +3009,10 @@ def auto_refresh_state(n):
             td_agents_off, td_agents_off, td_sups_off)
 
 @_bg_guard("td_running")
-def _run_teardown_bg():
-    """Background thread: trigger teardown job with live progress."""
+def _run_teardown_bg(obo_headers=None):
+    """Background thread: trigger teardown job with live progress.
+    obo_headers: per-user OBO headers captured at button-click time (Flask context).
+    MUST be passed — ST['user_alias'] is global and can contain another user's alias."""
     lg = ST.setdefault("td_log", [])
     if lg:
         lg.append("")
@@ -2971,8 +3027,8 @@ def _run_teardown_bg():
     _pre_sups = len(ST.get("supervisors") or [])
     lg.append("Triggering teardown job...")
     try:
-        _cat = ST.get("user_catalog") or CATALOG
-        _alias = ST.get("user_alias") or "unknown"
+        _cat = user_catalog(obo_headers) if obo_headers else (ST.get("user_catalog") or CATALOG)
+        _alias = _get_user_alias(obo_headers) if obo_headers else (ST.get("user_alias") or "unknown")
         rid, err = trigger_job(TEARDOWN_JOB_ID, notebook_params={
             "catalog_name": _cat, "user_alias": _alias})
         if err:
@@ -3063,7 +3119,8 @@ def handle_teardown(n0,n1,n2,n3):
         if lg:
             lg.append("")
         lg.append("Launching teardown...")
-        threading.Thread(target=_run_teardown_bg, daemon=True).start()
+        _td_obo = get_headers()  # capture per-user OBO headers BEFORE bg thread
+        threading.Thread(target=_run_teardown_bg, args=(_td_obo,), daemon=True).start()
         return _linkify_log_block(lg), no_update
     if tid == "td-agents":
         deleted, kept, errors = teardown_agents(keep_label="Iteration 3")
@@ -4124,10 +4181,12 @@ def page_iterations():
     iter_running = ST.get("iter_running")
     iter_done = ST.get("iterations_done", set())
     can_run = [False, False, False]
+    all_done = {"it1", "it2", "it3"}.issubset(iter_done)
     if has_baseline and not iter_running:
         if "it1" not in iter_done: can_run[0] = True
         elif "it2" not in iter_done: can_run[1] = True
         elif "it3" not in iter_done: can_run[2] = True
+        elif all_done: can_run[2] = True  # allow re-running Iteration 3 after all done
 
     fig = _build_iter_progression_chart()
 
@@ -4180,7 +4239,8 @@ def page_iterations():
             ], style={"display":"flex","gap":"16px","alignItems":"center","marginTop":"10px"}),
             html.Div([
                 html.Button(
-                    f"\u25a0 Stop {title}" if iter_running == f"it{i+1}" else f"Apply {title}",
+                    f"\u25a0 Stop {title}" if iter_running == f"it{i+1}"
+                    else (f"Re-run {title}" if key in iter_done else f"Apply {title}"),
                     id=f"btn-it{i+1}",
                     className="btn rose" if iter_running == f"it{i+1}" else ("btn primary" if can_run[i] else "btn"),
                     disabled=False if iter_running == f"it{i+1}" else not can_run[i],
@@ -4491,8 +4551,17 @@ def _iter_mark_setup_end(key, completed=False):
 def _iter_stop_now(key):
     """User clicked Stop: release the UI immediately. The bg thread is not killed
     (Python can't kill threads) -- it is orphaned and exits at its next checkpoint
-    without touching app state, because its token no longer matches."""
+    without touching app state, because its token no longer matches.
+    Any running supervisor job is cancelled immediately."""
     ST["iter_run_token"] = None
+    # Cancel any running supervisor refresh job
+    _sup_rid = ST.pop("_iter_sup_rid", None)
+    if _sup_rid:
+        try:
+            _cancel_job_run(_sup_rid, get_sp_headers())
+            log(f"{key}: cancelled supervisor job run {_sup_rid} on user stop")
+        except Exception as e:
+            log(f"{key}: failed to cancel supervisor job {_sup_rid}: {e}")
     ST.setdefault("iter_setup_log", []).append(
         "\u26d4 Stopped by user (any in-flight API call finishes in the background; no further steps run)")
     ST["iter_setup_t_end"] = time.time()
@@ -4536,7 +4605,7 @@ def _run_iter_setup_bg(tok, key, run_fn, obo_h, on_success):
             log(f"{key}: finished after user stop -- result discarded"); return
         if isinstance(result, tuple):
             _text, new_spaces = result
-            on_success(new_spaces, _log_step, tok)
+            on_success(new_spaces, _log_step, tok, obo_h)
             _iter_mark_setup_end(key, completed=True)
         else:
             _log_step(f"ABORTED: {key} setup failed (see log above)")
@@ -4555,25 +4624,25 @@ def _run_iter_setup_bg(tok, key, run_fn, obo_h, on_success):
 
 
 
-def _it1_success(new_spaces, _log_step, tok):
+def _it1_success(new_spaces, _log_step, tok, obo_h=None):
     _log_step(f"Done: {len(new_spaces)} agents configured")
-    _run_supervisor_refresh_job("it1", tok, _log_step)
+    _run_supervisor_refresh_job("it1", tok, _log_step, obo_headers=obo_h)
     log(f"Iter1 features applied: {len(new_spaces)} agents")
     ST["iter_setup_done"] = True
 
 
-def _it2_success(new_spaces, _log_step, tok):
+def _it2_success(new_spaces, _log_step, tok, obo_h=None):
     ST["_iter_cloned_spaces"] = new_spaces
     _log_step(f"Done: {len(new_spaces)} agents configured with metric views + CoD")
-    _run_supervisor_refresh_job("it2", tok, _log_step)
+    _run_supervisor_refresh_job("it2", tok, _log_step, obo_headers=obo_h)
     log(f"Iter2 features applied: {len(new_spaces)} agents")
     ST["iter_setup_done"] = True
 
 
-def _it3_success(new_spaces, _log_step, tok):
+def _it3_success(new_spaces, _log_step, tok, obo_h=None):
     ST["_iter_cloned_spaces"] = new_spaces
     ST["iter3_agent_spaces"] = new_spaces  # For manual step UI
-    _run_supervisor_refresh_job("it3", tok, _log_step)
+    _run_supervisor_refresh_job("it3", tok, _log_step, obo_headers=obo_h)
     _log_step("Cloned agents:")
     for a_name, a_sid in new_spaces.items():
         _log_step(f"  • {a_name}: {a_sid[:20]}...")
@@ -4595,7 +4664,8 @@ def _iter_button_click(key):
     label, run_fn, on_success = _ITER_RUNNERS[key]
     if ST.get("iter_running") == key:
         _iter_stop_now(key)
-        return _build_iter_status(), f"Apply {label}", True, [False] * NAV_TAB_COUNT
+        done_label = f"Re-run {label}" if key in ST.get("iterations_done", set()) else f"Apply {label}"
+        return _build_iter_status(), done_label, True, [False] * NAV_TAB_COUNT
     if ST.get("iter_running"):
         raise PreventUpdate
     log(f"{label}: starting background thread")
@@ -4745,15 +4815,18 @@ def _iter_btn_outputs(running_key=None):
     return children + disabled + classnames
 
 def _iter_btn_reset_outputs():
-    """Return 9 values resetting buttons to 'Apply' with the SAME can_run logic as page_iterations()."""
+    """Return 9 values resetting buttons with the SAME can_run logic as page_iterations()."""
     has_baseline = bool(ST.get("agents"))
     iter_done = ST.get("iterations_done", set())
+    all_done = {"it1", "it2", "it3"}.issubset(iter_done)
     can_run = [False, False, False]
     if has_baseline and not ST.get("iter_running"):
         if "it1" not in iter_done: can_run[0] = True
         elif "it2" not in iter_done: can_run[1] = True
         elif "it3" not in iter_done: can_run[2] = True
-    children = [f"Apply {t}" for t in _ITER_TITLES]
+        elif all_done: can_run[2] = True  # allow re-running Iteration 3 after all done
+    children = [f"Re-run {t}" if f"it{i+1}" in iter_done else f"Apply {t}"
+                for i, t in enumerate(_ITER_TITLES)]
     disabled = [not ok for ok in can_run]
     classnames = ["btn primary" if ok else "btn" for ok in can_run]
     return children + disabled + classnames
@@ -4776,6 +4849,7 @@ def _iter_btn_reset_outputs():
           Output("btn-it1","className", allow_duplicate=True),
           Output("btn-it2","className", allow_duplicate=True),
           Output("btn-it3","className", allow_duplicate=True),
+          Output("page-refresh","data", allow_duplicate=True),
           Input("iter-bench-poll","n_intervals"),
           prevent_initial_call=True)
 def poll_iter_bench(n):
@@ -4798,7 +4872,7 @@ def poll_iter_bench(n):
             ST["iter_setup_error"] = False
             ST["iter_running"] = None
             _iter_finished()
-            return grid1, ch1, grid2, ch2, grid3, ch3, True, dcc.Graph(figure=_build_iter_progression_chart(), config={"displayModeBar":False}), *_iter_btn_reset_outputs()  # disable poll
+            return grid1, ch1, grid2, ch2, grid3, ch3, True, dcc.Graph(figure=_build_iter_progression_chart(), config={"displayModeBar":False}), *_iter_btn_reset_outputs(), -int(n or 1)  # disable poll + force page re-render
         # Check if manual step gate is active (Iter 3 only)
         if ST.get("iter_manual_step"):
             running_key = ST.get("iter_running")
@@ -4809,20 +4883,20 @@ def poll_iter_bench(n):
                     ST["_it3_gate_rendered"] = True
                 else:
                     grid3 = no_update   # keep the panel on screen (do NOT overwrite it with the log)
-            return grid1, ch1, grid2, ch2, grid3, ch3, False, no_update, *_iter_btn_outputs(running_key)  # keep polling
+            return grid1, ch1, grid2, ch2, grid3, ch3, False, no_update, *_iter_btn_outputs(running_key), no_update  # keep polling
         # Check if setup completed — transition to benchmark phase
         if ST.get("iter_setup_done"):
             ST["iter_setup_phase"] = False
             ST["iter_setup_done"] = False
             _start_iter_bench(running_key, "Iteration " + running_key[-1], get_headers())
-            return grid1, ch1, grid2, ch2, grid3, ch3, False, no_update, *_iter_btn_outputs(running_key)  # keep polling
+            return grid1, ch1, grid2, ch2, grid3, ch3, False, no_update, *_iter_btn_outputs(running_key), no_update  # keep polling
         # Check for hung thread (>5 min with no new log entries)
         t0 = ST.get("iter_setup_t0", 0)
         if t0 and (time.time() - t0) > 300:
             last_log = ST.get("iter_setup_log", [])
             if last_log and not any("ERROR" in l.upper() for l in last_log[-3:]):
                 ST["iter_setup_log"].append("WARNING: Setup taking >5 minutes — may be hung")
-        return grid1, ch1, grid2, ch2, grid3, ch3, not still_running, dcc.Graph(figure=_build_iter_progression_chart(), config={"displayModeBar":False}) if not still_running else no_update, *_iter_btn_outputs(ST.get("iter_running"))
+        return grid1, ch1, grid2, ch2, grid3, ch3, not still_running, dcc.Graph(figure=_build_iter_progression_chart(), config={"displayModeBar":False}) if not still_running else no_update, *_iter_btn_outputs(ST.get("iter_running")), -int(n or 1) if not still_running else no_update
 
     for key, idx in [("it1",0), ("it2",1), ("it3",2)]:
         results = ST.get(f"iter_{key}_results")
@@ -4835,7 +4909,7 @@ def poll_iter_bench(n):
             else: grid3, ch3 = g, charts
 
     still_running = ST.get("iter_bench_active") is not None or ST.get("iter_setup_phase", False) or ST.get("iter_running") is not None
-    return grid1, ch1, grid2, ch2, grid3, ch3, not still_running, dcc.Graph(figure=_build_iter_progression_chart(), config={"displayModeBar":False}) if not still_running else no_update, *(_iter_btn_reset_outputs() if not still_running else _iter_btn_outputs(ST.get("iter_running")))
+    return grid1, ch1, grid2, ch2, grid3, ch3, not still_running, dcc.Graph(figure=_build_iter_progression_chart(), config={"displayModeBar":False}) if not still_running else no_update, *(_iter_btn_reset_outputs() if not still_running else _iter_btn_outputs(ST.get("iter_running"))), -int(n or 1) if not still_running else no_update
 
 
 
@@ -4851,6 +4925,32 @@ def _sup_learn(endpoint, kind=None, tool=None, name=None):
         d["tools"].append(tool)
     if name:
         d["name"] = name
+
+
+def _fetch_endpoint_model(ep):
+    """Query serving endpoint config and return the served model name (cached in ST)."""
+    cache_key = f"_ep_model_{ep}"
+    if cache_key in ST:
+        return ST[cache_key]
+    try:
+        h = get_headers()
+        r = requests.get(f"{HOST}/api/2.0/serving-endpoints/{ep}", headers=h, timeout=10)
+        if r.status_code == 200:
+            cfg = r.json().get("config") or {}
+            entities = cfg.get("served_entities") or cfg.get("served_models") or []
+            names = []
+            for e in entities:
+                n = e.get("entity_name") or e.get("model_name") or e.get("name") or ""
+                v = e.get("entity_version") or e.get("model_version") or ""
+                if n:
+                    names.append(f"{n}" + (f" v{v}" if v else ""))
+            result = ", ".join(names) if names else None
+        else:
+            result = None
+    except Exception:
+        result = None
+    ST[cache_key] = result
+    return result
 
 
 def _sup_profile(sup):
@@ -4891,7 +4991,32 @@ def _sup_profile(sup):
     elif learned.get("tools"):
         names = learned["tools"]
         kind = "mcp" if any(_MCP_HINT in n for n in names) else "multi"
-        bullets = [f"Tool seen in last run: {n}" for n in names]
+        # Categorize learned tools into readable summaries (not raw dumps)
+        _genie = [n for n in names if n in ("demand-analysis", "inventory-management",
+                  "logistics-operations", "supplier-risk", "executive-reporting")]
+        _mcp = [n for n in names if _MCP_HINT in n]
+        _fns = [n for n in names if "__" in n and n not in _mcp]  # UC functions have catalog__schema__fn format
+        _other = [n for n in names if n not in _genie and n not in _mcp and n not in _fns]
+        bullets = []
+        if _genie:
+            pretty = lambda tid: tid.replace("-", " ").title()
+            bullets.append(f"{len(_genie)} domain agents: {', '.join(pretty(g) for g in _genie)}")
+        if _mcp:
+            bullets.append("Genie One MCP (single-tool architecture)")
+        if _fns:
+            # Show count + short names (strip catalog__schema__ prefix)
+            short = [n.rsplit("__", 1)[-1] if "__" in n else n for n in _fns]
+            bullets.append(f"{len(_fns)} policy SQL function{'s' if len(_fns) != 1 else ''}: {', '.join(short)}")
+        bullets += [f"Tool: {n}" for n in _other]
+    # Fallback: infer architecture from description when tools endpoint isn't readable
+    if kind == "unknown":
+        _dl = (sup.get("desc_full") or "").lower()
+        if "mcp" in _dl or "genie one" in _dl or "genie-one" in _dl:
+            kind = "mcp"
+            bullets = bullets or ["Single tool: Genie One (MCP) — inferred from description"]
+        elif any(w in _dl for w in ("multi-agent", "coordinates", "5 specialist", "domain agents")):
+            kind = "multi"
+            bullets = bullets or ["Multi-agent architecture — inferred from description"]
     summary = {
         "multi": "Multi-agent supervisor: splits the question and routes each part to Genie domain agents, then synthesises one answer.",
         "mcp": "Single-tool supervisor: forwards the whole question to Genie One MCP, which finds the data itself.",
@@ -4907,8 +5032,10 @@ def _sup_profile(sup):
                    + ". Its architecture is detected live during the first comparison run.")
     if title == ep and kind == "mcp":
         title = "Genie One MCP Supervisor"
+    model = _fetch_endpoint_model(ep) if ep else None
     return dict(title=title, kind=kind, summary=summary, bullets=bullets,
-                created=(sup.get("create_time") or "")[:16].replace("T", " "))
+                created=(sup.get("create_time") or "")[:16].replace("T", " "),
+                model=model)
 
 
 def _is_system_name(name):
@@ -5232,11 +5359,14 @@ def _build_cmp_live(side):
         _side_prof = _sup_profile(_side_sup) if _side_sup else None
         if _side_prof and _side_prof["kind"] == "mcp":
             display_answer = display_answer.replace("Explore in Databricks", "Explore Genie One")
+    _tok = ST.get(f"cmp_usage_{side}") or {}
+    _tok_total = _tok.get("total_tokens") or ((_tok.get("input_tokens") or 0) + (_tok.get("output_tokens") or 0))
+    _tok_str = f" \u2022 {_tok_total:,} tokens" if _tok_total else ""
     return html.Div([
         html.Div([
             html.Span(status, style={"fontWeight": "700", "color": col, "fontSize": "13px"}),
             html.Span(f"{el_s} \u2022 {live['calls']} tool call{'s' if live['calls'] != 1 else ''}"
-                      f" \u2022 {len(answer):,} chars of output",
+                      f" \u2022 {len(answer):,} chars{_tok_str}",
                       style={"fontFamily": "var(--mono)", "fontSize": "12px", "color": C["muted"]}),
         ], style={"display": "flex", "justifyContent": "space-between", "gap": "10px", "marginBottom": "6px"}),
         html.Div("Live steps", style={"fontSize": "11px", "fontWeight": "700", "letterSpacing": "0.05em",
@@ -5250,12 +5380,7 @@ def _build_cmp_live(side):
                                     style={"color": C["muted"], "fontSize": "12.5px"}),
                           style={"fontSize": "13px"}),
                  style={**box, "height": "320px", "maxHeight": "320px", "boxSizing": "border-box", "flexShrink": "0", "background": C["surface"]}),
-        # Explore link below the output
-        html.A("Explore Genie One" if (_side_prof and _side_prof["kind"] == "mcp") else "Explore Supervisor Agent",
-               href=_supervisor_url(_side_sup) if _side_sup else None, target="_blank",
-               style={"fontSize":"13px","fontWeight":"600","color":C["indigo"],
-                      "textDecoration":"none","marginTop":"8px","display":"inline-block"})
-        if (_side_sup and _supervisor_url(_side_sup) and answer and live.get("status") == "done") else html.Div(),
+        # Explore link is already in the supervisor card above — no duplicate here.
     ], style={"marginBottom": "14px"})
 
 
@@ -5304,7 +5429,10 @@ def _cmp_status_line(names=("Supervisor A", "Supervisor B")):
         icon, ick = _CMP_STEP_STYLE.get(kind, ("\u2022", "muted"))
         summ = _cmp_step_summary(kind, last) if last else "No steps yet"
         calls = live.get("calls", 0)
-        stats = f"{el_s} \u2022 {calls} tool call{'s' if calls != 1 else ''} \u2022 {len(live.get('answer') or ''):,} chars"
+        _utok = ST.get(f"cmp_usage_{side}") or {}
+        _utot = _utok.get("total_tokens") or ((_utok.get("input_tokens") or 0) + (_utok.get("output_tokens") or 0))
+        _utxt = f" \u2022 {_utot:,} tok" if _utot else ""
+        stats = f"{el_s} \u2022 {calls} tool call{'s' if calls != 1 else ''} \u2022 {len(live.get('answer') or ''):,} chars{_utxt}"
         cards.append(html.Div([
             html.Div([
                 html.Span(lab, style={"background": C[ck], "color": "#fff", "borderRadius": "6px", "padding": "1px 8px",
@@ -5483,8 +5611,9 @@ def _run_rob_bg(version, obo_headers):
         for vi, q in enumerate(t["variations"], 1):
             res.append(dict(id=t["id"], vi=vi, question=q, gt=_tc_gt(t["id"], t["gt"]), agent=t["agent"], verdict="WAITING",
                             found=None, closest=None, sql=None, answer="", secs=0))
+    _rob_tokens = [0]  # mutable accumulator for thread safety
     ST.update(rob_results=res, rob_version=version, rob_t0=time.time(), rob_t_end=None, rob_running=True,
-              rob_log=[f"Started on {version} agents ({_ROB_TOTAL} Genie calls)"])
+              rob_total_tokens=0, rob_log=[f"Started on {version} agents ({_ROB_TOTAL} Genie calls)"])
     def _one(r):
         sid = agents.get(r["agent"])
         if not sid:
@@ -5494,6 +5623,9 @@ def _run_rob_bg(version, obo_headers):
         t0 = time.time()
         resp = ask_genie(sid, r["question"], headers=obo_headers)
         r["secs"] = round(time.time() - t0, 1)
+        _u = resp.get("usage") or {}
+        _rob_tokens[0] += _u.get("total_tokens") or _u.get("output_tokens") or 0
+        ST["rob_total_tokens"] = _rob_tokens[0]
         if resp.get("status") != "COMPLETED":
             r.update(verdict="ERROR", answer=str(resp.get("answer", ""))[:300])
         else:
@@ -5542,11 +5674,12 @@ def _build_stability_section():
     stages = [("Baseline", ST.get("bench_results"))] + [
         (ITER_INFO[i][0], ST.get(f"iter_it{i+1}_results")) for i in range(3)]
     stages = [(n, r) for n, r in stages if r and not any(x.get("verdict") in ("WAITING", "RUNNING") for x in r)]
-    head = html.H3("Cross-iteration stability", style={"marginTop": "28px"})
+    head = html.H3("Cross-iteration stability")
     if len(stages) < 2:
         return html.Div([head, html.P("Needs at least two completed benchmark stages in this app session "
                                       "(Baseline and an iteration) to compare verdict flips and value stability.",
-                                      style={"color": C["muted"], "fontSize": "13px"})])
+                                      style={"color": C["muted"], "fontSize": "13px"})],
+                        className="stage", style={"marginTop": "4px"})
     ok = lambda v: v in ("EXACT", "TOLERANT")
     by = [{r["id"]: r for r in res} for _, res in stages]
     ids = [r["id"] for r in stages[0][1]]
@@ -5580,7 +5713,7 @@ def _build_stability_section():
         html.Table([html.Thead(html.Tr([html.Th("Test")] + [html.Th(n) for n, _ in stages] + [html.Th("Change")])),
                     html.Tbody(rows or [html.Tr(html.Td("No verdict changes between stages.", colSpan=len(stages) + 2))])],
                    className="tbl"),
-    ], className="stage")
+    ], className="stage", style={"marginTop": "4px"})
 
 
 # 3D-style palette: (front, top, side) -- mid-tone colours that read on both light and dark backgrounds
@@ -5852,7 +5985,7 @@ def page_robustness():
         dcc.Interval(id="rob-poll", interval=3000, disabled=not running),
         # One-shot: re-discover agent versions right after the page opens (the cached list can be stale)
         dcc.Interval(id="rob-opts-refresh", interval=400, max_intervals=1),
-    ])
+    ], style={"paddingBottom": "60px"})
 
 
 def _rob_button_label():
@@ -5899,9 +6032,13 @@ def handle_rob(n_click, _n, version):
         threading.Thread(target=_run_rob_bg, args=(version, get_headers()), daemon=True).start()
         return _build_rob_body(), f"Running on {version} agents\u2026", False, True, [True] * n_nav, _rob_button_label()
     if ST.get("rob_running"):
-        return _build_rob_body(), f"Running on {ST.get('rob_version') or version} agents\u2026", False, True, \
+        _rtok = ST.get("rob_total_tokens") or 0
+        _rtxt = f" \u2022 {_rtok:,} tokens so far" if _rtok else ""
+        return _build_rob_body(), f"Running on {ST.get('rob_version') or version} agents\u2026{_rtxt}", False, True, \
             [True] * n_nav, _rob_button_label()
-    return _build_rob_body(), "Complete", True, False, [_app_busy_now()] * n_nav, _rob_button_label()
+    _rtok = ST.get("rob_total_tokens") or 0
+    _rtxt = f" \u2022 {_rtok:,} tokens" if _rtok else ""
+    return _build_rob_body(), f"Complete{_rtxt}", True, False, [_app_busy_now()] * n_nav, _rob_button_label()
 
 
 def _cmp_done_status(ra, rb):
@@ -5909,7 +6046,12 @@ def _cmp_done_status(ra, rb):
     pb = sum(1 for r in rb if r["verdict"] in ("EXACT", "TOLERANT"))
     na = ST.get("cmp_name_a") or "Supervisor A"
     nb = ST.get("cmp_name_b") or "Supervisor B"
-    return html.Span(f"Complete \u2014 {na}: {pa}/{len(ra) or _NT()}, {nb}: {pb}/{len(rb) or _NT()}",
+    _ua = ST.get("cmp_usage_a") or {}
+    _ub = ST.get("cmp_usage_b") or {}
+    _ta = _ua.get("total_tokens") or ((_ua.get("input_tokens") or 0) + (_ua.get("output_tokens") or 0))
+    _tb = _ub.get("total_tokens") or ((_ub.get("input_tokens") or 0) + (_ub.get("output_tokens") or 0))
+    _tok_part = f" \u2022 Tokens: {na} {_ta:,}, {nb} {_tb:,}" if (_ta or _tb) else ""
+    return html.Span(f"Complete \u2014 {na}: {pa}/{len(ra) or _NT()}, {nb}: {pb}/{len(rb) or _NT()}{_tok_part}",
                      style={"color": C["teal"], "fontSize": "13px", "fontWeight": "600"})
 
 
@@ -5961,6 +6103,8 @@ def page_comparison():
             html.H3(prof["title"] or label, style={"marginTop":"4px","marginBottom":"4px",
                                                    "overflowWrap":"anywhere","whiteSpace":"normal"}),
             html.Span(f"Created {prof['created']}", style={"color":C["muted"],"fontSize":"12px"}) if prof["created"] else html.Div(),
+            html.Span(f"Model: {prof['model']}", style={"color":C["muted"],"fontSize":"12px","display":"block",
+                                                         "marginTop":"2px"}) if prof.get("model") else html.Div(),
             html.P(prof["summary"], style={"color":C["ink"],"fontSize":"13.5px","margin":"10px 0 6px",
                                            "lineHeight":"1.5"}),
             html.Ul([html.Li(b, style={"fontSize":"12.5px","color":C["muted"],"fontFamily":"var(--mono)"})
@@ -6065,7 +6209,7 @@ def _run_cmp_bg(ea, eb, obo_headers):
         side = results_key[-1]
         live = ST[f"cmp_live_{side}"]
         try:
-            text, secs, _usage = call_supervisor_stream(ep, MAIN_PROMPT, headers=obo_headers,
+            text, secs, usage = call_supervisor_stream(ep, MAIN_PROMPT, headers=obo_headers,
                                                         on_step=_cmp_on_step(side, ep))
         except Exception as e:
             live["status"], live["t_end"] = "error", time.time()
@@ -6080,6 +6224,7 @@ def _run_cmp_bg(ea, eb, obo_headers):
             live["answer"] = text  # non-streamed fallback: still show the output
         live["status"], live["t_end"] = ("error" if failed else "done"), time.time()
         ST[f"{results_key}_elapsed"] = secs
+        ST[f"cmp_usage_{side}"] = usage
         results = ST[results_key]
         if text.startswith("ERROR:") or text == "(empty)":
             # Never score an error message -- digits in it would produce fake passes
@@ -6127,7 +6272,12 @@ def _run_cmp_bg(ea, eb, obo_headers):
     ST["cmp_running"] = False
     na = ST.get("cmp_name_a") or "A"
     nb = ST.get("cmp_name_b") or "B"
-    log(f"Comparison: {na}={pa}/{len(ra)} ({sa:.0f}s), {nb}={pb}/{len(rb)} ({sb:.0f}s), total {elapsed:.0f}s")
+    _ua = ST.get("cmp_usage_a") or {}
+    _ub = ST.get("cmp_usage_b") or {}
+    _ta = _ua.get("total_tokens") or ((_ua.get("input_tokens") or 0) + (_ua.get("output_tokens") or 0))
+    _tb = _ub.get("total_tokens") or ((_ub.get("input_tokens") or 0) + (_ub.get("output_tokens") or 0))
+    _tlog = f", tokens: {na}={_ta:,} {nb}={_tb:,}" if (_ta or _tb) else ""
+    log(f"Comparison: {na}={pa}/{len(ra)} ({sa:.0f}s), {nb}={pb}/{len(rb)} ({sb:.0f}s), total {elapsed:.0f}s{_tlog}")
     try:
         _save_comparison_run(ea, eb, sa, sb, elapsed, ST["cmp_last_user"], obo_headers)
     except Exception as e:
@@ -6379,6 +6529,7 @@ def _chat_bg(target, question, obo_headers):
             convo = [{"role": "assistant" if m["role"] == "agent" else "user", "content": m["text"]}
                      for m in sess["history"] if m["role"] in ("user", "agent")]
             resp, elapsed, usage = call_supervisor_stream(target[4:], convo, headers=obo_headers, on_step=on_step)
+            run["usage"] = usage
             if _is_supervisor_time_limit(resp):
                 resp = "ERROR:TIME_LIMIT:" + resp
         else:
@@ -6426,8 +6577,11 @@ def _build_chat_view(target):
                      html.Span(x if len(x) <= 600 else x[:600] + " \u2026",
                                style={"whiteSpace":"pre-wrap","wordBreak":"break-word","fontSize":"12.5px"})),
                 ], style={"display":"flex","gap":"8px","padding":"2px 0"}) for t, k, x in run["steps"]]
+        _cu = run.get("usage") or {}
+        _ctot = _cu.get("total_tokens") or ((_cu.get("input_tokens") or 0) + (_cu.get("output_tokens") or 0))
+        _ctxt = f" \u2022 {_ctot:,} tokens" if _ctot else ""
         head = (f"Working\u2026 {el}s \u2022 {run.get('calls', 0)} tool call(s)" if run.get("running")
-                else f"Steps of the last reply ({el}s)")
+                else f"Steps of the last reply ({el}s{_ctxt})")
         live = html.Details([
             html.Summary(head, style={"cursor":"pointer","fontSize":"12.5px","color":C["muted"],"fontWeight":"600"}),
             html.Div(html.Div(rows or [html.Span("Waiting for the first step\u2026",
@@ -6604,7 +6758,10 @@ def chat_poll(_n, _clicks, target):
         return _build_chat_view(target), f"Waiting for the reply\u2026 {el}s", False, True
     status = ""
     if run.get("t_end") and run.get("target") == target:
-        status = (f"Replied in {run['t_end'] - run['t0']:.0f}s" if run.get("status") == "done"
+        _pu = run.get("usage") or {}
+        _ptot = _pu.get("total_tokens") or ((_pu.get("input_tokens") or 0) + (_pu.get("output_tokens") or 0))
+        _ptxt = f" \u2022 {_ptot:,} tokens" if _ptot else ""
+        status = (f"Replied in {run['t_end'] - run['t0']:.0f}s{_ptxt}" if run.get("status") == "done"
                   else "The last request failed \u2014 see the message above.")
     return _build_chat_view(target), status, True, False
 

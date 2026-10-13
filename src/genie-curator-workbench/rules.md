@@ -155,6 +155,13 @@
     Flask request context is thread-local. Always capture `obo_h = get_headers()`
     BEFORE `threading.Thread(...).start()` and pass as parameter.
 
+36b. **NEVER read ST['user_alias'] or ST['user_catalog'] for job parameters.**
+     ST is a single global dict shared by ALL concurrent users. If user A sets
+     `ST['user_alias'] = 'a'` and user B triggers a job, it picks up 'a'.
+     All job-triggering code MUST derive alias/catalog from per-request OBO headers:
+     `_alias = _get_user_alias(obo_headers)`, `_cat = user_catalog(obo_headers)`.
+     ST reads are ONLY acceptable for display/telemetry (heartbeat, UI chips).
+
 37. **NEVER block a Dash callback** for multi-minute operations.
     All long-running work (setup, teardown, benchmarks, iteration features) MUST
     go in background threads with polling intervals for live progress.

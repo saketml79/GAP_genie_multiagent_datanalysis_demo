@@ -174,10 +174,16 @@ This is a UI-only step — no API available yet. The `fiscal_targets` table must
 - Retries on 429 RESOURCE_EXHAUSTED with exponential backoff
 
 ## State Management
-Global `ST` dict (in-memory, per-process):
+Global `ST` dict (in-memory, per-process, **shared across all concurrent users**):
 - agents, supervisors, benchmarks, catalog_exists, table_count
 - warehouse_state, warehouse_name, _wh_starting (fire-and-forget flag)
 - setup_running, setup_step, setup_log, setup_tasks
+
+**CRITICAL: `ST["user_alias"]` and `ST["user_catalog"]` are last-writer-wins.**
+Multiple users share the same ST. Any code that needs the CURRENT user's alias
+or catalog for job parameters MUST derive it from per-request OBO headers
+(`_get_user_alias(obo_headers)`, `user_catalog(obo_headers)`), NOT from ST.
+ST reads are only safe for display/telemetry (heartbeat chip, UI cards).
 - td_running, td_log (teardown background thread progress)
 - iterations_done (set), iter_running (None or "it1"/"it2"/"it3")
 - iter_setup_phase (bool), iter_setup_log (list) — live progress during iteration feature setup
@@ -194,8 +200,9 @@ Global `ST` dict (in-memory, per-process):
 - Steps get pulsating animation (CSS `.step-row.running`) as each task starts
 
 ### Teardown (background thread + polling)
-- `td-everything` click → launches `_run_teardown_bg()` in daemon thread
-- `_run_teardown_bg` uses SP for Jobs API trigger + polling
+- `td-everything` click → captures OBO headers → launches `_run_teardown_bg(obo_headers)` in daemon thread
+- `_run_teardown_bg` derives alias/catalog from OBO headers (NOT from ST) for job params
+- Uses SP for Jobs API trigger + polling
 - `td-poll` Interval (1.5s) updates `td-out` from `ST["td_log"]`
 - Shows progress: Triggering → Job starting → PENDING → RUNNING → TERMINATED → COMPLETE
 
@@ -235,8 +242,10 @@ Global `ST` dict (in-memory, per-process):
    page on every launch.
 
 ### Iteration Setup (background thread + polling)
-- btn-itN click captures OBO headers, launches _run_iter1_full_bg(obo_headers) in daemon thread
-- Phase 1: run_iteration_1() runs in background with log_fn callback for live progress
+- btn-itN click captures OBO headers, launches _run_iter_setup_bg(obo_headers) in daemon thread
+- Success callbacks (_it1_success, _it2_success, _it3_success) receive obo_h from the bg thread
+  and forward it to _run_supervisor_refresh_job(obo_headers=obo_h) for per-user alias/catalog
+- Phase 1: run_iteration_N() runs in background with log_fn callback for live progress
 - Column/table comments applied via SQL Statement API (mirrors notebook cell 10 Step 1)
 - No external notebooks called — all iteration logic is direct API (Genie + SQL)
 - iter_setup_log updated at each step; poll_iter_bench renders _build_iter_status() panel
