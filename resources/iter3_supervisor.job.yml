@@ -2,8 +2,12 @@ resources:
   jobs:
     curator_iter3_supervisor:
       name: "Curator Workbench: Iteration 3 Supervisor"
-      description: "Points the Supply Chain Control Tower Supervisor at the Iteration 3 agents and adds the Iteration 3 instructions + 5 SQL function tools. Triggered by the Curator Workbench app; runs as the deploying user."
+      description: "Points the Supply Chain Control Tower Supervisor at the Iteration 3 agents. Triggered by the Curator Workbench app; runs as the deploying user."
       max_concurrent_runs: 1
+      tags:
+        application: gapgenie
+        project: gap_supply_chain_demo
+        purpose: iter3_supervisor
       run_as:
         user_name: ${workspace.current_user.userName}
       permissions:

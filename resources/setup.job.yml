@@ -5,15 +5,21 @@
 resources:
   jobs:
     curator_workbench_setup:
-      name: "[${bundle.target}] Curator Workbench: Full Setup"
+      name: "Curator Workbench: Full Setup"
       description: |
         End-to-end provisioning of the Supply Chain Control Tower demo.
         Creates the Unity Catalog, generates all domain data in parallel,
         builds reporting views, sets up Genie Agents + Supervisor, and
         grants access to all workspace users.
       tags:
+        application: gapgenie
         project: gap_supply_chain_demo
         purpose: setup
+      run_as:
+        user_name: ${workspace.current_user.userName}
+      permissions:
+        - service_principal_name: c188e666-d3b4-4784-8f3a-00915fdd03fe
+          level: CAN_MANAGE_RUN
 
       tasks:
         - task_key: create_catalog
@@ -71,18 +77,9 @@ resources:
               catalog_name: ${var.catalog_name}
           environment_key: Default
 
-        - task_key: add_comments
-          depends_on:
-            - task_key: reporting_views
-          notebook_task:
-            notebook_path: ../src/07_add_all_comments.py
-            base_parameters:
-              catalog_name: ${var.catalog_name}
-          environment_key: Default
-
         - task_key: setup_agents
           depends_on:
-            - task_key: add_comments
+            - task_key: reporting_views
           notebook_task:
             notebook_path: ../src/08_setup_genie_supervisor.py
             base_parameters:

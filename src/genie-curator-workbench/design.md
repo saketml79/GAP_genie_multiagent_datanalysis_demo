@@ -14,21 +14,32 @@ User (Browser)
         ├─ POST /api/2.0/sql/statements/                  (catalog/data queries)
         ├─ GET  /api/2.0/sql/warehouses/{id}              (warehouse status)
         ├─ POST /api/2.0/sql/warehouses/{id}/start        (warehouse start)
-        ├─ POST /api/2.1/jobs/run-now                     (setup/teardown jobs)
-        └─ GET  /api/2.1/jobs/runs/get                    (poll job status)
+        ├─ POST /api/2.1/jobs/update                     (set run_as to calling user — via OBO)
+        ├─ POST /api/2.1/jobs/run-now                     (trigger job — via SP)
+        └─ GET  /api/2.1/jobs/runs/get                    (poll job status — via SP)
 ```
 
 ## Authentication: OBO + SP (Split by API)
 
 Most API calls use the logged-in user's OBO token. The **Jobs API** uses the app's
 **Service Principal** credentials (via `w.config.authenticate()`) because there is NO
-`jobs` OBO scope. The SP has `CAN_MANAGE_RUN` on both jobs via App resources.
-The jobs themselves have `run_as: user`, so they execute as the logged-in user.
+`jobs` OBO scope. The SP has `CAN_MANAGE_RUN` on all per-user jobs via App resources.
+
+**Per-User Jobs (DAB Deploy)**: Each user runs a DAB deploy from the GitHub repo to
+their Databricks profile, which creates 5 jobs prefixed with `[dev <alias>]`:
+- `[dev ssuman] Curator Workbench: Full Setup`
+- `[dev ssuman] Curator Workbench: Teardown`
+- `[dev ssuman] Curator Workbench: Iteration 1/2/3 Supervisor`
+
+Each user's jobs have `run_as` set to that user naturally (they deployed them).
+The app discovers all per-user jobs at first request via `GET /api/2.1/jobs/list`,
+matches the `[dev <alias>]` or `[<alias>]` naming convention, and routes each user
+to their own jobs. No runtime `run_as` changes needed.
 
 | Auth Method | APIs                                               |
 |-------------|----------------------------------------------------|
 | OBO Token   | genie, sql, serving-endpoints, catalog, files, workspace |
-| SP (App resources) | Jobs API: trigger_job + poll_run (CAN_MANAGE_RUN) |
+| SP (App resources) | Jobs API: trigger (run-now) + poll (runs/get) + list (discover per-user jobs) |
 
 ### Token Extraction Priority
 1. `X-Forwarded-Access-Token` (primary — injected by Databricks App proxy)
@@ -118,6 +129,12 @@ discover_agents_by_label("Iteration 1") # → 5 agents with "SC" AND "Iteration 
 The supervisor-agents API (/api/2.1/supervisor-agents) requires a scope NOT in the standard
 OBO token set. Use serving-endpoints API (/api/2.0/serving-endpoints) filtering for `mas-*-endpoint`
 pattern. This is the working approach, not a "fallback" — log it cleanly, no error language.
+
+**Per-user alias filtering**: Both discovery paths filter by `(alias)` in the display_name.
+If a user's alias is `ssuman_bpcs_com`, only supervisors with `(ssuman_bpcs_com)` in their
+display_name are returned. This prevents cross-user contamination — ssuman never sees
+mchaudri's supervisors, and vice versa. Same pattern applies to `discover_agents()`
+via `_group_agent_versions()` and the fallback domain-keyword loop.
 
 ## Agent Cloning Pattern (from notebook)
 

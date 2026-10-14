@@ -9,7 +9,7 @@
     body{
       font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
       background:linear-gradient(135deg,#f0f4f8 0%,#e8edf5 50%,#f5f7fa 100%);
-      color:#1e293b;display:flex;justify-content:center;align-items:center;
+      color:#1e293b;display:flex;flex-direction:column;justify-content:center;align-items:center;
       min-height:100vh;overflow:hidden;
     }
     body::before{
@@ -37,10 +37,12 @@
       animation:spin .9s linear infinite;margin:0 auto 22px;
     }
     @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
     #status{
       font-size:15px;color:#4f46e5;font-weight:600;
       min-height:24px;margin-bottom:14px;
     }
+    #status.deploying{animation:pulse 1.8s ease-in-out infinite}
     .track{
       height:5px;background:rgba(99,102,241,.1);border-radius:3px;
       overflow:hidden;margin-bottom:10px;
@@ -53,8 +55,8 @@
     @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
     .fill.done{animation:none;background:#14b8a6}
     #detail{color:#64748b;font-size:11.5px;font-family:'Cascadia Code',monospace;min-height:16px}
-    .ready{color:#0d9488 !important}
-    .error{color:#f43f5e !important}
+    .ready{color:#0d9488 !important;animation:none !important}
+    .error{color:#f43f5e !important;animation:none !important}
     .hidden{display:none}
     #enter-btn{
       display:inline-block;margin-top:28px;padding:14px 40px;font-size:16px;
@@ -74,6 +76,14 @@
     }
     .step.active{border-color:#0d9488;color:#0d9488;background:rgba(20,184,166,.08)}
     .step.done{border-color:rgba(13,148,136,.4);color:#0f766e;background:rgba(20,184,166,.06)}
+    #deploy-detail{
+      margin-top:14px;padding:10px 14px;border-radius:10px;
+      background:rgba(99,102,241,.05);border:1px solid rgba(99,102,241,.1);
+      font-size:12px;color:#4f46e5;font-family:'Cascadia Code',monospace;
+      text-align:left;line-height:1.6;max-height:120px;overflow-y:auto;
+    }
+    #deploy-detail .line{opacity:.5}
+    #deploy-detail .line.current{opacity:1;font-weight:600}
   </style>
 </head>
 <body>
@@ -88,13 +98,28 @@
   <div id="detail"></div>
 
   <div class="steps">
-    <span id="s1" class="step">Check status</span>
-    <span id="s2" class="step">Wake app</span>
-    <span id="s3" class="step">Wait for startup</span>
-    <span id="s4" class="step">Ready</span>
+    <span id="s1" class="step">Check</span>
+    <span id="s2" class="step">Deploy</span>
+    <span id="s3" class="step">Start</span>
+    <span id="s4" class="step">Initialize</span>
+    <span id="s5" class="step">Ready</span>
   </div>
 
+  <div id="deploy-detail" class="hidden"></div>
+
   <a id="enter-btn" class="hidden" href="">Enter Workbench &rarr;</a>
+</div>
+
+<div id="error-box" class="hidden" style="
+  max-width:520px;width:92%;margin-top:16px;
+  background:rgba(244,63,94,.08);border:1px solid rgba(244,63,94,.25);
+  border-radius:14px;padding:18px 22px;text-align:left;
+  font-size:13px;color:#9f1239;font-family:'Cascadia Code',monospace;
+  word-break:break-word;
+">
+  <div style="font-weight:700;margin-bottom:6px;font-family:'Segoe UI',system-ui,sans-serif;">Error Details</div>
+  <div id="error-text"></div>
+  <div style="margin-top:10px;font-family:'Segoe UI',system-ui,sans-serif;color:#64748b;font-size:12px;">Refresh the page to retry.</div>
 </div>
 
 <script>
@@ -103,44 +128,98 @@
   let targetUrl = "";
   let startTime = Date.now();
   const POLL_MS = 3500;
-  const MAX_WAIT_MS = 300000;
+  const DEPLOY_POLL_MS = 2500;
+  const MAX_WAIT_MS = 600000; // 10 min for deploys
+  let deployPhases = [];
 
   function setStep(n){
-    for(let i=1;i<=4;i++){
+    for(let i=1;i<=5;i++){
       const el = $("s"+i);
       el.classList.remove("active","done");
       if(i<n) el.classList.add("done");
       else if(i===n) el.classList.add("active");
     }
   }
-  function setProgress(pct, msg, detail){
+  function setProgress(pct, msg, detail, deploying){
     $("bar").style.width = pct+"%";
     if($("bar").classList.contains("done")) $("bar").classList.remove("done");
     $("status").textContent = msg;
+    if(deploying) $("status").classList.add("deploying");
+    else $("status").classList.remove("deploying");
     $("detail").textContent = detail || "";
+  }
+  function addDeployPhase(msg){
+    if(!msg) return;
+    // De-dup
+    const clean = msg.replace(/\.\.\.$/, "").trim();
+    if(deployPhases.length && deployPhases[deployPhases.length-1] === clean) return;
+    deployPhases.push(clean);
+    renderDeployLog();
+  }
+  function renderDeployLog(){
+    const box = $("deploy-detail");
+    box.classList.remove("hidden");
+    box.innerHTML = deployPhases.map((p,i) => {
+      const isCurrent = i === deployPhases.length - 1;
+      const icon = isCurrent ? "\u25B6" : "\u2713";
+      return `<div class="line ${isCurrent ? 'current' : ''}">${icon} ${p}</div>`;
+    }).join("");
+    box.scrollTop = box.scrollHeight;
   }
   function showReady(){
     $("spinner").classList.add("hidden");
     $("status").textContent = "App is ready!";
     $("status").classList.add("ready");
+    $("status").classList.remove("deploying");
     $("bar").style.width = "100%";
     $("bar").classList.add("done");
     $("detail").textContent = "";
-    setStep(4);
+    $("deploy-detail").classList.add("hidden");
+    setStep(5);
     const btn = $("enter-btn");
     btn.href = targetUrl;
     btn.classList.remove("hidden");
     setTimeout(() => { window.location.href = targetUrl; }, 2200);
   }
-  function showError(msg){
+  function showError(msg, detail){
     $("spinner").classList.add("hidden");
     $("status").textContent = msg;
     $("status").classList.add("error");
-    $("detail").textContent = "Refresh the page to retry.";
+    $("status").classList.remove("deploying");
+    $("detail").textContent = "";
+    var box = $("error-box");
+    $("error-text").textContent = detail || msg;
+    box.classList.remove("hidden");
   }
   async function api(path, method){
     const r = await fetch(path, {method: method||"GET"});
     return r.json();
+  }
+
+  function elapsed(){ return Math.round((Date.now() - startTime) / 1000); }
+  function fmtElapsed(s){ return s >= 60 ? Math.floor(s/60)+"m "+String(s%60).padStart(2,"0")+"s" : s+"s"; }
+
+  async function pollReady(){
+    setStep(4);
+    const readyPoll = setInterval(async () => {
+      const el = elapsed();
+      try {
+        const rr = await fetch("/api/ready");
+        const rd = await rr.json();
+        if(rd.ready){
+          clearInterval(readyPoll);
+          showReady();
+          return;
+        }
+        setProgress(88, "Initializing UI\u2026", fmtElapsed(el) + " \u2022 HTTP " + (rd.status||"pending"), false);
+      } catch(e) {
+        setProgress(86, "Checking UI\u2026", fmtElapsed(el), false);
+      }
+      if(Date.now() - startTime > MAX_WAIT_MS){
+        clearInterval(readyPoll);
+        showReady(); // fallback: let user click
+      }
+    }, 3000);
   }
 
   async function main(){
@@ -154,49 +233,163 @@
 
     // Step 1: Check status
     setStep(1);
-    setProgress(8, "Checking app status\u2026");
+    setProgress(8, "Checking app status\u2026", "", false);
     let d;
-    try { d = await api("/api/status"); } catch(e) {
-      showError("Status check failed: " + e.message);
+    try {
+      const r = await fetch("/api/status");
+      d = await r.json();
+      if(!r.ok) {
+        showError("Status check failed (" + r.status + ")", d.message || JSON.stringify(d));
+        return;
+      }
+    } catch(e) {
+      showError("Status check failed", e.message);
       return;
     }
     const state = (d.state || "").toUpperCase();
 
-    if(state === "ACTIVE" || state === "RUNNING"){
-      setProgress(90, "App is already running!");
-      setStep(3);
-      setTimeout(showReady, 1200);
+    // If a deployment is in progress, enter deploy-watch flow
+    if(d.deploying){
+      setStep(2);
+      addDeployPhase("Deployment in progress");
+      if(d.deploy_message) addDeployPhase(d.deploy_message);
+      setProgress(15, "Deploying new version\u2026", d.deploy_message || "Preparing\u2026", true);
+      pollDeploy();
       return;
     }
 
-    // Step 2: Wake it up
-    setStep(2);
+    if(state === "ACTIVE" || state === "RUNNING"){
+      setProgress(85, "App compute is up \u2014 checking UI\u2026", "", false);
+      setStep(3);
+      pollReady();
+      return;
+    }
+
+    // Step 2/3: Wake it up
+    setStep(3);
     if(["STOPPED","CRASHED","IDLE","ERROR"].includes(state)){
-      setProgress(15, "App is " + state.toLowerCase() + " \u2014 waking it up\u2026", d.message);
-      try { await api("/api/start", "POST"); } catch(e) {
-        showError("Failed to start: " + e.message);
+      setProgress(15, "App is " + state.toLowerCase() + " \u2014 starting\u2026", d.message, false);
+      try {
+        const sr = await fetch("/api/start", {method:"POST"});
+        const sd = await sr.json();
+        if(!sr.ok || sd.ok === false){
+          showError("Failed to start (" + sr.status + ")", sd.message || JSON.stringify(sd));
+          return;
+        }
+      } catch(e) {
+        showError("Failed to start", e.message);
         return;
       }
     } else {
-      setProgress(15, "App status: " + state + " \u2014 waiting\u2026", d.message);
+      setProgress(15, "App status: " + state + " \u2014 waiting\u2026", d.message, false);
     }
 
-    // Step 3: Poll until ACTIVE
-    setStep(3);
+    // Poll until ACTIVE
+    pollCompute();
+  }
+
+  function pollDeploy(){
+    /* Poll status with deploy awareness — stays in deploy step until pending_deployment clears. */
     const poll = setInterval(async () => {
-      const elapsed = Math.round((Date.now() - startTime) / 1000);
-      const pct = Math.min(18 + (elapsed / (MAX_WAIT_MS/1000)) * 75, 95);
+      const el = elapsed();
+      const pct = Math.min(15 + (el / (MAX_WAIT_MS/1000)) * 70, 80);
       let pd;
-      try { pd = await api("/api/status"); } catch(e) {
-        setProgress(pct, "Waiting\u2026", elapsed+"s \u2022 connection retry");
+      try {
+        const pr = await fetch("/api/status");
+        pd = await pr.json();
+        if(!pr.ok){
+          setProgress(pct, "Deploying\u2026", fmtElapsed(el) + " \u2022 status " + pr.status, true);
+          return;
+        }
+      } catch(e) {
+        setProgress(pct, "Deploying\u2026", fmtElapsed(el) + " \u2022 connection retry", true);
         return;
       }
       const st = (pd.state || "").toUpperCase();
 
+      if(pd.deploying){
+        // Still deploying
+        if(pd.deploy_message) addDeployPhase(pd.deploy_message);
+        setProgress(pct, "Deploying new version\u2026", fmtElapsed(el) + " \u2022 " + (pd.deploy_message || st), true);
+        setStep(2);
+        return;
+      }
+
+      // Deploy finished — now check compute state
+      addDeployPhase("Deployment complete");
       if(st === "ACTIVE" || st === "RUNNING"){
         clearInterval(poll);
-        setProgress(96, "App is running \u2014 loading UI\u2026", elapsed+"s elapsed");
-        setTimeout(showReady, 3500);
+        setProgress(85, "App compute is up \u2014 checking UI\u2026", fmtElapsed(el), false);
+        pollReady();
+        return;
+      }
+      if(st === "STOPPED" || st === "IDLE"){
+        // Deploy done but compute stopped — start it
+        clearInterval(poll);
+        setStep(3);
+        addDeployPhase("Starting compute\u2026");
+        setProgress(40, "Starting app\u2026", fmtElapsed(el), false);
+        try {
+          await fetch("/api/start", {method:"POST"});
+        } catch(e) { /* will be caught in next poll */ }
+        pollCompute();
+        return;
+      }
+      if(st === "STARTING" || st === "RESUMING"){
+        setStep(3);
+        addDeployPhase("Compute starting\u2026");
+        setProgress(pct, "Starting compute\u2026", fmtElapsed(el) + " \u2022 " + st, false);
+        return;
+      }
+      if(st === "CRASHED" || st === "ERROR"){
+        clearInterval(poll);
+        showError("App " + st.toLowerCase() + " after deploy. Check logs in the Databricks Apps UI.", pd.message);
+        return;
+      }
+      setProgress(pct, "Deploying\u2026", fmtElapsed(el) + " \u2022 " + st, true);
+
+      if(Date.now() - startTime > MAX_WAIT_MS){
+        clearInterval(poll);
+        showError("Timed out after 10 minutes. Try refreshing or check the Apps UI.");
+      }
+    }, DEPLOY_POLL_MS);
+  }
+
+  function pollCompute(){
+    /* Poll until compute is ACTIVE, then switch to UI-ready check. */
+    setStep(3);
+    const poll = setInterval(async () => {
+      const el = elapsed();
+      const pct = Math.min(18 + (el / (MAX_WAIT_MS/1000)) * 75, 85);
+      let pd;
+      try {
+        const pr = await fetch("/api/status");
+        pd = await pr.json();
+        if(!pr.ok){
+          setProgress(pct, "Waiting\u2026", fmtElapsed(el) + " \u2022 status " + pr.status, false);
+          return;
+        }
+      } catch(e) {
+        setProgress(pct, "Waiting\u2026", fmtElapsed(el) + " \u2022 connection retry", false);
+        return;
+      }
+      const st = (pd.state || "").toUpperCase();
+
+      // If a new deploy started mid-poll, switch to deploy flow
+      if(pd.deploying){
+        clearInterval(poll);
+        addDeployPhase("New deployment detected");
+        if(pd.deploy_message) addDeployPhase(pd.deploy_message);
+        setProgress(20, "Deploying new version\u2026", pd.deploy_message || "", true);
+        setStep(2);
+        pollDeploy();
+        return;
+      }
+
+      if(st === "ACTIVE" || st === "RUNNING"){
+        clearInterval(poll);
+        setProgress(85, "App compute is up \u2014 waiting for UI\u2026", fmtElapsed(el), false);
+        pollReady();
         return;
       }
       if(st === "CRASHED" || st === "ERROR"){
@@ -204,11 +397,11 @@
         showError("App crashed (" + st + "). Check logs in the Databricks Apps UI.");
         return;
       }
-      setProgress(pct, "Starting up\u2026", st + " \u2022 " + elapsed + "s elapsed");
+      setProgress(pct, "Starting up\u2026", fmtElapsed(el) + " \u2022 " + st, false);
 
       if(Date.now() - startTime > MAX_WAIT_MS){
         clearInterval(poll);
-        showError("Timed out after 5 minutes. Try refreshing or check the Apps UI.");
+        showError("Timed out after 10 minutes. Try refreshing or check the Apps UI.");
       }
     }, POLL_MS);
   }

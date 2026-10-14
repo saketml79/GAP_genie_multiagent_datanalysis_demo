@@ -6,13 +6,20 @@
 # COMMAND ----------
 
 dbutils.widgets.text("catalog_name", "GAP_Demo_Dev", "Catalog Name")
+dbutils.widgets.text("user_email", "", "Owner Email (optional)")
 CATALOG = dbutils.widgets.get("catalog_name")
+USER_EMAIL = dbutils.widgets.get("user_email").strip()
 print(f"Target catalog: {CATALOG}")
+if USER_EMAIL:
+    print(f"Ownership will be transferred to: {USER_EMAIL}")
 
 # COMMAND ----------
 
 spark.sql(f"CREATE CATALOG IF NOT EXISTS {CATALOG}")
 print(f"✓ Catalog {CATALOG} created")
+if USER_EMAIL:
+    spark.sql(f"ALTER CATALOG {CATALOG} SET OWNER TO `{USER_EMAIL}`")
+    print(f"  ↳ Ownership transferred to {USER_EMAIL}")
 
 # COMMAND ----------
 
@@ -26,9 +33,18 @@ schemas = {
 
 for schema_name, comment in schemas.items():
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{schema_name} COMMENT '{comment}'")
+    if USER_EMAIL:
+        spark.sql(f"ALTER SCHEMA {CATALOG}.{schema_name} SET OWNER TO `{USER_EMAIL}`")
     print(f"✓ Schema {CATALOG}.{schema_name} created")
 
-print(f"\n✓ All schemas created in {CATALOG}")
+if USER_EMAIL:
+    # Also transfer default schema ownership
+    try:
+        spark.sql(f"ALTER SCHEMA {CATALOG}.default SET OWNER TO `{USER_EMAIL}`")
+    except Exception:
+        pass  # default schema may not exist
+
+print(f"\n✓ All schemas created in {CATALOG}" + (f" (owned by {USER_EMAIL})" if USER_EMAIL else ""))
 
 # COMMAND ----------
 

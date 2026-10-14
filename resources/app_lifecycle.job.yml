@@ -12,8 +12,14 @@ resources:
         window). Start-on-access is handled by an external Azure Function
         proxy — not by this job.
       tags:
+        application: gapgenie
         project: gap_supply_chain_demo
         purpose: cost_optimization
+      run_as:
+        user_name: ${workspace.current_user.userName}
+      permissions:
+        - service_principal_name: c188e666-d3b4-4784-8f3a-00915fdd03fe
+          level: CAN_MANAGE_RUN
 
       tasks:
         - task_key: check_idle_and_stop
@@ -34,7 +40,7 @@ resources:
       environments:
         - environment_key: default
           spec:
-            client: "1"
+            client: "2"
 
       email_notifications:
         on_failure:
