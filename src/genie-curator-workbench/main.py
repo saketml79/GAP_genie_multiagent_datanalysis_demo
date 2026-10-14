@@ -623,12 +623,16 @@ def _restore_comparison(rj):
 def _load_persisted_state(headers=None):
     """Load benchmark history from Delta table into ST on startup."""
     h = headers or get_headers()
+    _load_email = _get_user_from_headers(h)
     try:
         bt = _bench_table(h)
+        # Per-user: only load this user's runs (prevents cross-user contamination)
+        _email_filter = f"WHERE user_email = '{_load_email}'" if _load_email and _load_email != "?" else ""
         rows = run_sql_query(f"""
             SELECT stage, score, total, exact_count, tolerant_count,
                    elapsed_secs, total_tokens, run_ts, user_email, results_json
             FROM {bt}
+            {_email_filter}
             ORDER BY run_ts DESC
         """, h, timeout=30)
         if not rows:
@@ -676,7 +680,11 @@ def _load_persisted_state(headers=None):
                             if "expected" in r:
                                 try: r["expected"] = float(r["expected"])
                                 except (ValueError, TypeError): pass
-                        ST[result_key] = loaded
+                        # Baseline → per-user state (_ust); iterations → top-level ST (matches their readers)
+                        if result_key == "bench_results":
+                            _ust()[result_key] = loaded
+                        else:
+                            ST[result_key] = loaded
                     except Exception as e:
                         log(f"Results JSON parse for {stage}: {e}")
                 # Store metadata for Baseline specifically
